@@ -4,21 +4,9 @@
  * then delegates to wompo/ssr `renderToStream`. The resulting `ReadableStream` is what the
  * dev/prod handler pipes back to the HTTP response.
  */
-import { pathToFileURL } from 'node:url';
 import type { LayoutModule, Loader, LoaderArgs, PageModule, PageProps } from '../types.js';
 import type { RouteEntry } from './routes.js';
-
-type WompoComponent = (...args: any[]) => any;
-
-interface WompoRuntime {
-	attrs: (props: unknown) => unknown;
-	defineWompo: (component: WompoComponent, opts: { name: string }) => WompoComponent;
-	html: (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
-	renderToStream: (
-		component: WompoComponent,
-		props?: unknown,
-	) => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>;
-}
+import { getWompoRuntime, type WompoComponent, type WompoRuntime } from './wompo-runtime.js';
 
 export interface RenderPageInput {
 	route: RouteEntry;
@@ -33,28 +21,6 @@ export interface RenderPageInput {
 }
 
 let pageRootCounter = 0;
-const runtimeByCwd = new Map<string, Promise<WompoRuntime>>();
-
-function importFromApp(spec: string, cwd: string): Promise<any> {
-	const resolved = Bun.resolveSync(spec, cwd);
-	return import(pathToFileURL(resolved).href);
-}
-
-function getWompoRuntime(cwd: string): Promise<WompoRuntime> {
-	let cached = runtimeByCwd.get(cwd);
-	if (!cached) {
-		cached = Promise.all([importFromApp('wompo', cwd), importFromApp('wompo/ssr', cwd)]).then(
-			([wompo, ssr]) => ({
-				attrs: wompo.attrs,
-				defineWompo: wompo.defineWompo,
-				html: wompo.html,
-				renderToStream: ssr.renderToStream,
-			}),
-		);
-		runtimeByCwd.set(cwd, cached);
-	}
-	return cached;
-}
 
 export async function renderRouteToStream(
 	input: RenderPageInput,

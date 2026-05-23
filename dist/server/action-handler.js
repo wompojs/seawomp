@@ -15,7 +15,7 @@
  *   400    → malformed body
  *   500    → action threw
  */
-import * as ssr from 'wompo/ssr';
+import { getWompoRuntime } from './wompo-runtime.js';
 const ACTION_PATH = '/_action/';
 /** Returns `true` if the URL pathname matches the action endpoint. */
 export function isActionRequest(pathname, prefix = ACTION_PATH) {
@@ -24,6 +24,7 @@ export function isActionRequest(pathname, prefix = ACTION_PATH) {
 /** Handle an action invocation. Resolves to a Response. */
 export async function dispatchAction(request, opts = {}) {
     const prefix = opts.pathPrefix ?? ACTION_PATH;
+    const { ssr } = await getWompoRuntime(opts.cwd ?? process.cwd());
     const url = new URL(request.url);
     if (!url.pathname.startsWith(prefix)) {
         return new Response('Not Found', { status: 404 });

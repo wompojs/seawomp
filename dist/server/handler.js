@@ -27,7 +27,7 @@ export function createHandler(opts) {
         const pathname = url.pathname;
         // Server-action endpoint (precedes route matching so it can't collide with a page route).
         if (request.method === 'POST' && isActionRequest(pathname)) {
-            return dispatchAction(request);
+            return dispatchAction(request, { cwd: opts.cwd ?? process.cwd() });
         }
         // API routes — dispatch before pages so /api/foo can't be shadowed by a page.
         if (compiledApi.length) {

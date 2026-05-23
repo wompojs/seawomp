@@ -15,13 +15,15 @@
  *   400    → malformed body
  *   500    → action threw
  */
-import * as ssr from 'wompo/ssr';
+import { getWompoRuntime } from './wompo-runtime.js';
 
 const ACTION_PATH = '/_action/';
 
 export interface ActionDispatchOptions {
   /** Override the URL prefix matched against the request (default `/_action/`). */
   pathPrefix?: string;
+  /** App root used to resolve peer singletons for server actions. */
+  cwd?: string;
 }
 
 /** Returns `true` if the URL pathname matches the action endpoint. */
@@ -35,6 +37,7 @@ export async function dispatchAction(
   opts: ActionDispatchOptions = {},
 ): Promise<Response> {
   const prefix = opts.pathPrefix ?? ACTION_PATH;
+  const { ssr } = await getWompoRuntime(opts.cwd ?? process.cwd());
   const url = new URL(request.url);
   if (!url.pathname.startsWith(prefix)) {
     return new Response('Not Found', { status: 404 });

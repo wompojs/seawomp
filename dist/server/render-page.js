@@ -1,29 +1,5 @@
-/* Render a matched route as HTML.
- *
- * Wraps the page component in (outer → inner) layouts via `children`, runs the loader (if any),
- * then delegates to wompo/ssr `renderToStream`. The resulting `ReadableStream` is what the
- * dev/prod handler pipes back to the HTTP response.
- */
-import { pathToFileURL } from 'node:url';
+import { getWompoRuntime } from './wompo-runtime.js';
 let pageRootCounter = 0;
-const runtimeByCwd = new Map();
-function importFromApp(spec, cwd) {
-    const resolved = Bun.resolveSync(spec, cwd);
-    return import(pathToFileURL(resolved).href);
-}
-function getWompoRuntime(cwd) {
-    let cached = runtimeByCwd.get(cwd);
-    if (!cached) {
-        cached = Promise.all([importFromApp('wompo', cwd), importFromApp('wompo/ssr', cwd)]).then(([wompo, ssr]) => ({
-            attrs: wompo.attrs,
-            defineWompo: wompo.defineWompo,
-            html: wompo.html,
-            renderToStream: ssr.renderToStream,
-        }));
-        runtimeByCwd.set(cwd, cached);
-    }
-    return cached;
-}
 export async function renderRouteToStream(input) {
     const { route, params, request, loadModule, cwd } = input;
     const runtime = await getWompoRuntime(cwd);
