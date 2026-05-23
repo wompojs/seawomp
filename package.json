@@ -1,0 +1,64 @@
+{
+	"name": "seawomp",
+	"version": "0.1.0",
+	"description": "Web Component-first meta-framework on top of Wompo SSR (file-based routing, islands, View Transitions). Powered by Bun.",
+	"type": "module",
+	"bin": {
+		"seawomp": "./dist/cli.js"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./server": {
+			"types": "./dist/server/index.d.ts",
+			"default": "./dist/server/index.js"
+		},
+		"./client": {
+			"types": "./dist/runtime/index.d.ts",
+			"default": "./dist/runtime/index.js"
+		},
+		"./config": {
+			"types": "./dist/config.d.ts",
+			"default": "./dist/config.js"
+		},
+		"./components": {
+			"types": "./dist/components/index.d.ts",
+			"default": "./dist/components/index.js"
+		},
+		"./adapters/vercel": {
+			"types": "./dist/adapters/vercel.d.ts",
+			"default": "./dist/adapters/vercel.js"
+		}
+	},
+	"engines": {
+		"bun": ">=1.1"
+	},
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsc --watch",
+		"test": "bun test",
+		"test:e2e": "playwright test"
+	},
+	"peerDependencies": {
+		"wompo": ">=2.0.0",
+		"sharp": ">=0.33.0"
+	},
+	"peerDependenciesMeta": {
+		"sharp": {
+			"optional": true
+		}
+	},
+	"dependencies": {
+		"hono": "^4.12.22",
+		"lightningcss": "^1.27.0"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.49.0",
+		"@types/bun": "^1.1.0",
+		"@types/node": "^22.0.0",
+		"typescript": "^5.6.0",
+		"wompo": "^2.0.0"
+	}
+}
