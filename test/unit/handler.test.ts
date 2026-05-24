@@ -143,4 +143,93 @@ describe('createHandler', () => {
     const res = await h(new Request('http://x/nope'));
     expect(res.status).toBe(404);
   });
+
+  it('falls back to the default <title> when the page does not export head()', async () => {
+    write(
+      'page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function P(){ return html\`<i>x</i>\`; }
+       defineWompo(P, { name: 'tu-head-default' });
+       export default P;`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const h = createHandler({ routes, loadModule, title: 'My App' });
+    const body = await readBody(await h(new Request('http://x/')));
+    expect(body).toContain('<title>My App</title>');
+  });
+
+  it('injects per-page head() output and suppresses the default <title>', async () => {
+    write(
+      'page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function P(){ return html\`<i>x</i>\`; }
+       defineWompo(P, { name: 'tu-head-static' });
+       export default P;
+       export function head() {
+         return '<title>Page Title</title><meta name="description" content="d"/>';
+       }`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const h = createHandler({ routes, loadModule, title: 'My App' });
+    const body = await readBody(await h(new Request('http://x/')));
+    expect(body).toContain('<title data-seawomp-head>Page Title</title>');
+    // The default shell title must be suppressed so only one <title> is emitted.
+    expect(body).not.toContain('<title>My App</title>');
+    expect(body).toMatch(/<meta data-seawomp-head name="description" content="d"\s*\/?>/);
+  });
+
+  it('passes loader data + params to head() for dynamic routes', async () => {
+    const pageAbs = write(
+      'blog_slug_page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function P({ data }){ return html\`<h1>\${data.title}</h1>\`; }
+       defineWompo(P, { name: 'tu-head-dyn' });
+       export default P;
+       export function head({ params, data }) {
+         return '<title>' + data.title + ' — ' + params.slug + '</title>';
+       }`,
+    );
+    const loaderAbs = write(
+      'blog_slug_loader.ts',
+      `export async function loader({ params }) { return { title: 'Post ' + params.slug }; }`,
+    );
+    const routes: RouteEntry[] = [
+      { pattern: '/blog/:slug', pagePath: pageAbs, layoutPaths: [], loaderPath: loaderAbs },
+    ];
+    const h = createHandler({ routes, loadModule });
+    const body = await readBody(await h(new Request('http://x/blog/hello')));
+    expect(body).toContain('<title data-seawomp-head>Post hello — hello</title>');
+  });
+
+  it('a `(group)` directory provides a fresh layout root for its subtree', async () => {
+    write(
+      'layout.ts',
+      `import { html, defineWompo } from 'wompo';
+       function RootLayout({ children }){ return html\`<div class="root-l">\${children}</div>\`; }
+       defineWompo(RootLayout, { name: 'tu-root-grp' });
+       export default RootLayout;`,
+    );
+    write(
+      '(alt)/layout.ts',
+      `import { html, defineWompo } from 'wompo';
+       function AltLayout({ children }){ return html\`<section class="alt-l">\${children}</section>\`; }
+       defineWompo(AltLayout, { name: 'tu-alt-grp' });
+       export default AltLayout;`,
+    );
+    write(
+      '(alt)/x/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function X(){ return html\`<h1>x</h1>\`; }
+       defineWompo(X, { name: 'tu-x-grp' });
+       export default X;`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const h = createHandler({ routes, loadModule });
+    const res = await h(new Request('http://x/x'));
+    expect(res.status).toBe(200);
+    const body = stripMarkers(await readBody(res));
+    expect(body).toContain('class="alt-l"');
+    // Root layout must NOT be applied because the (alt) group reset the chain.
+    expect(body).not.toContain('class="root-l"');
+  });
 });

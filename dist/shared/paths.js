@@ -14,7 +14,12 @@ export function filePathToRoutePattern(relPath) {
     const noPage = noExt.replace(/\/page$/, '').replace(/^page$/, '');
     if (!noPage)
         return '/';
-    const segments = noPage.split('/').map((seg) => {
+    // `(group)` directories never contribute to the URL path — strip defensively in case a caller
+    // synthesises a pattern from the raw file path (the route scanner also skips them upstream).
+    const segments = noPage
+        .split('/')
+        .filter((seg) => !/^\(.+\)$/.test(seg))
+        .map((seg) => {
         const catchAll = seg.match(/^\[\.\.\.(.+)\]$/);
         if (catchAll)
             return `:${catchAll[1]}*`;
@@ -23,6 +28,8 @@ export function filePathToRoutePattern(relPath) {
             return `:${dynamic[1]}`;
         return seg;
     });
+    if (!segments.length)
+        return '/';
     return '/' + segments.join('/');
 }
 /** Compile a route pattern (e.g. `/blog/:id`) into a regex + ordered param names. */

@@ -295,6 +295,15 @@ function Home() {
 defineWompo(Home, { name: 'app-home-page' });
 export default Home;
 export const prerender = true;
+
+/* Per-page <head>: return raw HTML. Use \`{ params, data, url }\` for dynamic routes
+ * (the loader's data is passed in, identical to the page component). */
+export function head() {
+  return \`
+    <title>Home — seawomp</title>
+    <meta name="description" content="A seawomp app." />
+  \`;
+}
 `;
 }
 

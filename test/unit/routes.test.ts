@@ -85,4 +85,33 @@ describe('scanRoutes', () => {
 		const dynIdx = routes.findIndex((r) => r.pattern === '/blog/:id');
 		expect(newIdx).toBeLessThan(dynIdx);
 	});
+
+	it('strips `(group)` directories from the URL pattern', () => {
+		write('(docs)/docs/page.ts');
+		write('(marketing)/page.ts');
+		const routes = scanRoutes(tmpRoot);
+		const patterns = routes.map((r) => r.pattern).sort();
+		expect(patterns).toContain('/docs');
+		expect(patterns).toContain('/');
+	});
+
+	it('resets the inherited layout chain at a `(group)` boundary', () => {
+		write('layout.ts');
+		write('(docs)/layout.ts');
+		write('(docs)/docs/page.ts');
+		const routes = scanRoutes(tmpRoot);
+		const docs = routes.find((r) => r.pattern === '/docs')!;
+		// Only the (docs) layout — NOT the root layout — should wrap this page.
+		expect(docs.layoutPaths).toHaveLength(1);
+		expect(path.basename(path.dirname(docs.layoutPaths[0]))).toBe('(docs)');
+	});
+
+	it('resets the inherited error boundary at a `(group)` boundary', () => {
+		write('error.ts');
+		write('(docs)/error.ts');
+		write('(docs)/docs/page.ts');
+		const routes = scanRoutes(tmpRoot);
+		const docs = routes.find((r) => r.pattern === '/docs')!;
+		expect(path.basename(path.dirname(docs.errorPath!))).toBe('(docs)');
+	});
 });

@@ -43,7 +43,7 @@ export function createHandler(opts) {
             r.paramNames.forEach((name, i) => {
                 params[name] = decodeURIComponent(m[i + 1] || '');
             });
-            const bodyStream = await renderRouteToStream({
+            const { body: bodyStream, head: pageHead } = await renderRouteToStream({
                 route: r,
                 params,
                 request,
@@ -53,6 +53,7 @@ export function createHandler(opts) {
             return new Response(wrapStream(bodyStream, {
                 title: opts.title,
                 headExtra: opts.headExtra,
+                pageHead,
                 hydrateScript: opts.hydrateScript,
             }), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         }
@@ -67,6 +68,7 @@ function wrapStream(inner, opts) {
             controller.enqueue(enc.encode(openShell({
                 title: opts.title,
                 headExtra: opts.headExtra,
+                pageHead: opts.pageHead,
                 hydrateScript: opts.hydrateScript,
             })));
             const reader = inner.getReader();

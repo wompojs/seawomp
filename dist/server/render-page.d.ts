@@ -10,4 +10,10 @@ export interface RenderPageInput {
     /** App root used to resolve peer singletons such as wompo. */
     cwd: string;
 }
-export declare function renderRouteToStream(input: RenderPageInput): Promise<ReadableStream<Uint8Array>>;
+export interface RenderPageOutput {
+    body: ReadableStream<Uint8Array>;
+    /** HTML fragment to inject into <head>: the result of `pageMod.head(props)` with each
+     * top-level element tagged `data-seawomp-head` so SPA navigation can swap it in place. */
+    head: string;
+}
+export declare function renderRouteToStream(input: RenderPageInput): Promise<RenderPageOutput>;

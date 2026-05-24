@@ -62,7 +62,7 @@ export function createHandler(opts: HandlerOptions): (request: Request) => Promi
       r.paramNames.forEach((name, i) => {
         params[name] = decodeURIComponent(m[i + 1] || '');
       });
-      const bodyStream = await renderRouteToStream({
+      const { body: bodyStream, head: pageHead } = await renderRouteToStream({
         route: r,
         params,
         request,
@@ -73,6 +73,7 @@ export function createHandler(opts: HandlerOptions): (request: Request) => Promi
         wrapStream(bodyStream, {
           title: opts.title,
           headExtra: opts.headExtra,
+          pageHead,
           hydrateScript: opts.hydrateScript,
         }),
         { headers: { 'content-type': 'text/html; charset=utf-8' } },
@@ -85,7 +86,7 @@ export function createHandler(opts: HandlerOptions): (request: Request) => Promi
 /** Prefix the streamed body with the doctype/head opener and suffix with the closing tags. */
 function wrapStream(
   inner: ReadableStream<Uint8Array>,
-  opts: { title?: string; headExtra?: string; hydrateScript?: string },
+  opts: { title?: string; headExtra?: string; pageHead?: string; hydrateScript?: string },
 ): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream<Uint8Array>({
@@ -95,6 +96,7 @@ function wrapStream(
           openShell({
             title: opts.title,
             headExtra: opts.headExtra,
+            pageHead: opts.pageHead,
             hydrateScript: opts.hydrateScript,
           }),
         ),

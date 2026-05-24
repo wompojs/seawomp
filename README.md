@@ -127,6 +127,52 @@ export async function loader({ params }: LoaderArgs<{ id: string }>) {
 }
 ```
 
+### Per-page `<head>` — `export function head(props)`
+
+Any page may export a `head` function that returns an HTML fragment (title, meta, link, …). It
+receives the same `PageProps` as the component — including `data` from the adjacent loader — so
+dynamic routes like `[id]/page.ts` can set per-record titles and meta:
+
+```ts
+// app/blog/[id]/page.ts (continued from above)
+export function head({ params, data }: PageProps<{ title: string; excerpt: string }, { id: string }>) {
+	return `
+		<title>${data.title}</title>
+		<meta name="description" content="${data.excerpt}" />
+		<meta property="og:title" content="${data.title}" />
+	`;
+}
+```
+
+- Runs on the server during SSR and SSG; the resulting tags are tagged `data-seawomp-head`.
+- On SPA navigation, the client router swaps every `[data-seawomp-head]` element with the new
+  set — `document.title` updates without a full reload.
+- If `head()` returns a `<title>`, the default shell `<title>` (from `seawomp.config.ts`) is
+  suppressed so only one is emitted.
+- Escape user-supplied values yourself — `head()` returns raw HTML, mirroring `headExtra`.
+
+## Route groups — `(group)/` as a layout reset boundary
+
+A directory whose name matches `(name)` is a **route group**. It organizes routes without
+contributing to the URL path *and* resets the inherited layout / error-boundary chain — its own
+`layout.ts` (if any) becomes a new root for the subtree:
+
+```
+app/
+├── layout.ts            # site-wide root layout
+├── page.ts              # /            → wrapped in app/layout.ts
+├── about/page.ts        # /about       → wrapped in app/layout.ts
+└── (docs)/
+    ├── layout.ts        # fresh root, does NOT inherit app/layout.ts
+    ├── error.ts         # fresh error boundary for the group
+    └── docs/
+        ├── page.ts      # /docs        → wrapped only in (docs)/layout.ts
+        └── [slug]/page.ts # /docs/:slug → wrapped only in (docs)/layout.ts
+```
+
+Use it for marketing vs. app shells, docs vs. dashboard, or any section that needs a different
+chrome from the rest of the site.
+
 ## API routes
 
 Drop a `route.ts` anywhere under `app/api/`. Each file exports zero or more HTTP-verb handlers.

@@ -17,6 +17,7 @@
  * doesn't need to import any virtual module itself, which keeps it standalone for testing.
  */
 import { hydrate } from 'wompo/hydrate';
+import { applyHead } from './head.js';
 let routes = [];
 let compiled = [];
 const prefetchCache = new Map();
@@ -96,6 +97,7 @@ export async function navigate(href) {
     const swap = async () => {
         const [html] = await Promise.all([htmlPromise, modulesPromise]);
         const newDoc = new DOMParser().parseFromString(html, 'text/html');
+        syncPageHead(newDoc);
         document.body.replaceWith(newDoc.body);
         hydrate(document);
         window.history.pushState({}, '', url.href);
@@ -149,6 +151,14 @@ async function fetchPage(href) {
         throw new Error(`Navigation fetch failed: ${r.status}`);
     return r.text();
 }
+/** Mirror the per-page `[data-seawomp-head]` elements from the freshly-fetched document into the
+ * live one, so title/meta tags stay in sync across SPA navigations. */
+function syncPageHead(newDoc) {
+    const frag = Array.from(newDoc.head.querySelectorAll('[data-seawomp-head]'))
+        .map((el) => el.outerHTML)
+        .join('');
+    applyHead(frag);
+}
 if (typeof window !== 'undefined') {
     window.addEventListener('popstate', async () => {
         const startVT = document.startViewTransition?.bind(document);
@@ -159,6 +169,7 @@ if (typeof window !== 'undefined') {
                 loadRouteModules(pathname),
             ]);
             const newDoc = new DOMParser().parseFromString(html, 'text/html');
+            syncPageHead(newDoc);
             document.body.replaceWith(newDoc.body);
             hydrate(document);
         };

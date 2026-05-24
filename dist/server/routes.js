@@ -12,6 +12,10 @@ const PAGE_RE = /^page\.(ts|tsx|js|jsx)$/;
 const LAYOUT_RE = /^layout\.(ts|tsx|js|jsx)$/;
 const LOADER_RE = /^loader\.(ts|tsx|js|jsx)$/;
 const ERROR_RE = /^error\.(ts|tsx|js|jsx)$/;
+/** Directory name like `(docs)` — a "route group" that organizes routes without contributing a
+ * URL segment AND resets the inherited layout / error-boundary chain so its own `layout.ts`
+ * (if any) becomes a new root. */
+const GROUP_RE = /^\(.+\)$/;
 /** Scan an `app/` directory tree and return the discovered routes. */
 export function scanRoutes(appDir) {
     if (!fs.existsSync(appDir) || !fs.statSync(appDir).isDirectory())
@@ -54,11 +58,12 @@ export function scanRoutes(appDir) {
             });
         }
         for (const subdir of subdirs) {
+            const isGroup = GROUP_RE.test(subdir);
             stack.push({
                 dir: path.join(frame.dir, subdir),
-                rel: frame.rel ? `${frame.rel}/${subdir}` : subdir,
-                layouts: layoutsForChildren,
-                errorPath: localError,
+                rel: isGroup ? frame.rel : frame.rel ? `${frame.rel}/${subdir}` : subdir,
+                layouts: isGroup ? [] : layoutsForChildren,
+                errorPath: isGroup ? undefined : localError,
             });
         }
     }
