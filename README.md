@@ -43,7 +43,7 @@ my-app/
 ├── tsconfig.json
 ├── seawomp.config.ts
 ├── public/
-│   └── global.css           # served at /global.css; minified at build time
+│   └── global.css           # served at /global.css; link it from layout/head
 └── app/
     ├── layout.ts            # root layout with <seawomp-link> nav
     ├── page.ts              # /  (home, prerendered)
@@ -59,7 +59,7 @@ my-app/
 
 ```sh
 bun run dev          # → http://localhost:5173 (TS hot-reload, full-page reload on file change)
-bun run build        # → .seawomp/ (minified JS, hashed CSS, WebP/AVIF image variants, SSG HTML)
+bun run build        # → .seawomp/ (minified JS, WebP/AVIF image variants, SSG HTML)
 bun run build:vercel # → .seawomp/ with public assets copied into Vercel static output
 bun run start        # → serves the production build via Bun.serve
 ```
@@ -95,8 +95,8 @@ my-app/
 ```
 
 Page / layout files default-export a Wompo component. A loader exports `loader(args)`. An API
-route exports verb-keyed handlers (`GET`, `POST`, …). Pages may export `prerender: true` (or an
-array of paths) to opt into SSG.
+route exports verb-keyed handlers (`GET`, `POST`, …). Pages may export `prerender: true`,
+`prerender: string[]`, or `generateStaticPaths()` to opt into SSG.
 
 ## Pages
 
@@ -129,17 +129,19 @@ export async function loader({ params }: LoaderArgs<{ id: string }>) {
 
 ### Per-page `<head>` — `export function head(props)`
 
-Any page may export a `head` function that returns an HTML fragment (title, meta, link, …). It
-receives the same `PageProps` as the component — including `data` from the adjacent loader — so
-dynamic routes like `[id]/page.ts` can set per-record titles and meta:
+Any page or layout may export a `head` function that returns Wompo `html`` output (title, meta,
+link, …). It receives the same props as the component — including `data` from the adjacent loader
+— so dynamic routes like `[id]/page.ts` can set per-record titles and meta:
 
 ```ts
 // app/blog/[id]/page.ts (continued from above)
+import { html, unsafelyRenderString } from 'wompo';
+
 export function head({ params, data }: PageProps<{ title: string; excerpt: string }, { id: string }>) {
-	return `
-		<title>${data.title}</title>
-		<meta name="description" content="${data.excerpt}" />
-		<meta property="og:title" content="${data.title}" />
+	return html`
+		${unsafelyRenderString(`<title>${escapeHtml(data.title)}</title>`)}
+		<meta name="description" content="${data.excerpt}">
+		<meta property="og:title" content="${data.title}">
 	`;
 }
 ```
@@ -149,7 +151,62 @@ export function head({ params, data }: PageProps<{ title: string; excerpt: strin
   set — `document.title` updates without a full reload.
 - If `head()` returns a `<title>`, the default shell `<title>` (from `seawomp.config.ts`) is
   suppressed so only one is emitted.
-- Escape user-supplied values yourself — `head()` returns raw HTML, mirroring `headExtra`.
+- Wompo escapes interpolated attribute values. For raw-text tags such as `<title>`, `<script>`,
+  and `<style>`, use a small escaped helper with `unsafelyRenderString`.
+
+### Local Google Fonts
+
+Use `Font.google()` from `head()`. In dev it emits the normal Google Fonts link; during
+`seawomp build` prerendered HTML is rewritten to local `/_assets/fonts/` URLs.
+
+```ts
+import { html } from 'wompo';
+import { Font } from 'seawomp';
+
+export function head() {
+	return html`${Font.google({ family: 'Inter', weights: [400, 600, 700], display: 'swap' })}`;
+}
+```
+
+### Static generation
+
+Static pages can still use loaders. Mark a route as build-time safe with `prerender = true`; the
+loader runs during the build and the resulting HTML is written to `.seawomp/static`.
+
+Dynamic and catch-all routes should export `generateStaticPaths()`:
+
+```ts
+export function generateStaticPaths() {
+	return ['/docs/introduction', '/it/docs/introduction'];
+	// or: return [{ params: { slug: ['docs', 'introduction'] } }];
+}
+```
+
+When `siteUrl` is configured, the build also writes `sitemap.xml` from the prerendered paths.
+
+### Redirects and error responses
+
+Configured redirects run before API/page routing and before production static assets:
+
+```ts
+export default defineConfig({
+	redirects: [{ source: '/old/:slug*', destination: '/new/:slug*', status: 301 }],
+});
+```
+
+Loaders and pages can interrupt rendering:
+
+```ts
+import { notFound, redirect } from 'seawomp';
+
+export async function loader() {
+	if (!session) throw redirect('/login', 302);
+	if (!doc) throw notFound();
+}
+```
+
+Add `app/404.ts` for custom 404 HTML and `app/error.ts` for loader/render failures. Both receive
+normal page props plus `status`; `error.ts` also receives `error`.
 
 ## Route groups — `(group)/` as a layout reset boundary
 
@@ -243,8 +300,8 @@ export default defineConfig({
 });
 ```
 
-Variants land in `.seawomp/static/_assets/img/`. The build also writes an `image-manifest.json`
-that the prod server injects into `<head>` as `window.__SEAWOMP_IMAGES`; `<seawomp-image>` reads
+Variants land in `.seawomp/static/_assets/img/`. The build also writes the image map into the
+production manifest, and the prod server injects it into `<head>` as `window.__SEAWOMP_IMAGES`; `<seawomp-image>` reads
 it and populates `srcset` on connect — no markup change required. SVGs are passed through
 unchanged.
 
@@ -422,8 +479,10 @@ export default defineConfig({
 	outDir: '.seawomp', // build output (default '.seawomp')
 	port: 5173,
 	title: 'My App',
-	globalCss: 'public/global.css',
-	headExtra: `<link rel="preconnect" href="…">`,
+	siteUrl: 'https://example.com',
+	redirects: [
+		{ source: '/old/:slug*', destination: '/new/:slug*', status: 301 },
+	],
 	images: {
 		sizes: [640, 960, 1280, 1920],
 		formats: ['avif', 'webp'],
@@ -432,7 +491,7 @@ export default defineConfig({
 	minify: {
 		js: true, // Bun.build minify (defaults: prod=true, dev=false)
 		css: true, // lightningcss
-		html: true, // collapse <head> whitespace
+		html: true, // remove comments and whitespace between tags
 	},
 });
 ```
@@ -491,12 +550,12 @@ src/
 │   └── serve-prod.ts         # Bun.serve in prod mode
 ├── components/
 │   ├── image.ts              # <seawomp-image>
+│   ├── link.ts               # <seawomp-link>
 │   └── index.ts              # barrel side-effect re-export
 └── runtime/
     ├── index.ts              # public client entry
     ├── hydrate-entry.ts      # boots `wompo/hydrate` over the SSR'd document
     ├── router.ts             # navigate() + prefetch cache + modulepreload + View Transitions
-    ├── link.ts               # <seawomp-link>
     ├── actions.ts            # callAction proxy
     └── head.ts               # data-seawomp-head bookkeeping
 ```

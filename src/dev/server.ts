@@ -2,7 +2,7 @@
  *
  * Responsibilities, kept aligned with what Vite did before:
  *   - Scan `app/` for routes; rescan on file system events and broadcast `'reload'`.
- *   - Compute the head injection (global CSS + headExtra) and refresh when the CSS file changes.
+ *   - Compute framework head injection and refresh on source/public changes.
  *   - Mount a Fetch-API request handler that pipes SSR streams back via `Bun.serve`.
  *   - Serve client-side modules through /_src and node_modules deps through /_dep.
  *   - Serve `/_hydrate.js` (the route-aware bootstrap) as a generated string.
@@ -10,16 +10,17 @@
  *   - Provide a WebSocket on `/__seawomp_hmr` so the client reloads on source changes.
  */
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { ResolvedConfig } from '../config.js';
-import { scanRoutes, type RouteEntry } from '../server/routes.js';
+import { scanRoutes, scanSpecialRoutes, type RouteEntry, type SpecialRoutes } from '../server/routes.js';
 import { scanApiRoutes, type ApiRouteEntry } from '../server/api-router.js';
 import { createHandler } from '../server/handler.js';
 import { serveStatic } from '../server/static.js';
+import { compileRedirects, matchRedirect } from '../server/redirects.js';
 import { buildHydrateEntry } from './virtual.js';
-import { serveSrc, serveDep, invalidateSrc } from './source-server.js';
+import { serveSrc, serveDep, invalidateSrc, invalidateDeps } from './source-server.js';
 import { broadcastReload, registerSocket, unregisterSocket } from './hmr.js';
+import { discoverabilityHeadTags } from '../build/discoverability.js';
 
 const HYDRATE_PUBLIC = '/_hydrate.js';
 const SRC_PREFIX = '/_src/';
@@ -29,25 +30,10 @@ const HMR_PATH = '/__seawomp_hmr';
 export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> {
 	let routes: RouteEntry[] = scanRoutes(cfg.appDir);
 	let apiRoutes: ApiRouteEntry[] = scanApiRoutes(cfg.appDir);
+	let specialRoutes: SpecialRoutes = scanSpecialRoutes(cfg.appDir);
+	const redirects = compileRedirects(cfg.redirects);
 
-	// Cached head fragment: read globalCss off disk and stitch it together with headExtra.
-	let cachedHeadExtra: string | null = null;
-	async function computeHeadExtra(): Promise<string> {
-		if (cachedHeadExtra !== null) return cachedHeadExtra;
-		let css = '';
-		if (cfg.globalCss) {
-			try {
-				css = await fsp.readFile(cfg.globalCss, 'utf-8');
-			} catch (err) {
-				console.warn(
-					`[seawomp] could not read globalCss at ${cfg.globalCss}: ${(err as Error).message}`,
-				);
-			}
-		}
-		const styleTag = css ? `<style data-seawomp-global>${css}</style>` : '';
-		cachedHeadExtra = styleTag + (cfg.headExtra ?? '');
-		return cachedHeadExtra;
-	}
+	const frameworkHead = discoverabilityHeadTags(cfg.discoverability);
 
 	// File watcher: rescan on any change under appDir; full reload on any source change.
 	// `fs.watch` with `recursive: true` works on macOS and Linux as of Node 20.
@@ -55,6 +41,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 		fs.watch(cfg.appDir, { recursive: true }, (_event, filename) => {
 			routes = scanRoutes(cfg.appDir);
 			apiRoutes = scanApiRoutes(cfg.appDir);
+			specialRoutes = scanSpecialRoutes(cfg.appDir);
 			if (filename) invalidateSrc(path.join(cfg.appDir, filename));
 			broadcastReload();
 		});
@@ -67,28 +54,29 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 			broadcastReload();
 		});
 	}
-	// Global CSS: when it changes we just blow the cached head fragment.
-	if (cfg.globalCss) {
-		try {
-			fs.watch(cfg.globalCss, () => {
-				cachedHeadExtra = null;
-				broadcastReload();
-			});
-		} catch {
-			/* file may not exist yet */
-		}
+	if (fs.existsSync(cfg.publicDir)) {
+		fs.watch(cfg.publicDir, { recursive: true }, (_event, filename) => {
+			if (filename) invalidateSrc(path.join(cfg.publicDir, filename));
+			broadcastReload();
+		});
 	}
+	watchProjectResources(cwd, cfg);
+	watchLinkedDependency(cwd, 'seawomp');
+	watchLinkedDependency(cwd, 'wompo');
 
 	// Build a fresh handler each request — `routes` may have changed.
 	const buildHandler = async () => {
-		const headExtra = await computeHeadExtra();
 		return createHandler({
 			routes,
 			apiRoutes,
 			loadModule: (abs) => import(abs),
 			title: cfg.title,
-			headExtra,
+			frameworkHead,
 			cwd,
+			i18n: cfg.i18n,
+			redirects: cfg.redirects,
+			notFoundRoute: specialRoutes.notFoundRoute,
+			errorRoute: specialRoutes.errorRoute,
 		});
 	};
 
@@ -108,7 +96,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 
 			// 2. Hydrate entry — generated JS string baked from the current route table.
 			if (pathname === HYDRATE_PUBLIC) {
-				const body = buildHydrateEntry(routes);
+				const body = buildHydrateEntry(routes, { i18n: cfg.i18n, navigation: cfg.navigation });
 				return new Response(body, {
 					headers: { 'content-type': 'application/javascript', 'cache-control': 'no-cache' },
 				});
@@ -134,10 +122,13 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 				});
 			}
 
+			const redirect = matchRedirect(pathname, url.search, redirects);
+			if (redirect) return redirect;
+
 			// 5. Static assets from publicDir (only paths with an extension — otherwise fall through
 			//    to the SSR handler so app routes still match).
 			if (/\.[a-z0-9]+$/i.test(pathname)) {
-				const r = await serveStatic(cfg.publicDir, pathname);
+				const r = await serveStatic(cfg.publicDir, pathname, { request: req, mode: 'dev' });
 				if (r) return r;
 			}
 
@@ -165,4 +156,51 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 	});
 
 	console.log(`\n  seawomp dev → http://localhost:${server.port}\n`);
+
+	function watchProjectResources(projectRoot: string, cfg: ResolvedConfig): void {
+		const ignoredRoots = [
+			cfg.appDir,
+			path.join(projectRoot, 'src'),
+			cfg.publicDir,
+			cfg.outDir,
+			path.join(projectRoot, 'node_modules'),
+			path.join(projectRoot, '.git'),
+			path.join(projectRoot, 'dist'),
+		];
+		try {
+			fs.watch(projectRoot, { recursive: true }, (_event, filename) => {
+				if (!filename) return;
+				const abs = path.resolve(projectRoot, filename.toString());
+				if (ignoredRoots.some((root) => isInside(abs, root))) return;
+				broadcastReload();
+			});
+		} catch {
+			/* project root may not be recursively watchable */
+		}
+	}
+
+	function isInside(child: string, parent: string): boolean {
+		const rel = path.relative(parent, child);
+		return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+	}
+
+	function watchLinkedDependency(projectRoot: string, spec: string): void {
+		let pkgJson: string;
+		try {
+			pkgJson = Bun.resolveSync(`${spec}/package.json`, projectRoot);
+		} catch {
+			return;
+		}
+		const pkgRoot = path.dirname(pkgJson);
+		const distDir = path.join(pkgRoot, 'dist');
+		const watchDir = fs.existsSync(distDir) ? distDir : pkgRoot;
+		try {
+			fs.watch(watchDir, { recursive: true }, () => {
+				invalidateDeps();
+				broadcastReload();
+			});
+		} catch {
+			/* dependency may be virtual or not watchable */
+		}
+	}
 }

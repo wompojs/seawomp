@@ -1,7 +1,7 @@
 /* Dev HMR — v1 ships full page reload only.
  *
  * Opens a WebSocket per connected client. When the file watcher detects a change anywhere
- * under `appDir` / `globalCss`, every socket receives the string `'reload'` and the client
+ * under `appDir`, project `src/`, or `publicDir`, every socket receives the string `'reload'` and the client
  * runtime calls `location.reload()`.
  *
  * No module-level swap is implemented — the cost/benefit didn't pencil out for v1. Full

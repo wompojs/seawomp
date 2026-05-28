@@ -2,4 +2,6 @@
 export { createHandler } from './handler.js';
 export { renderRouteToStream } from './render-page.js';
 export { scanRoutes } from './routes.js';
+export { scanSpecialRoutes } from './routes.js';
 export { scanApiRoutes, compileApiRoutes, dispatchApi } from './api-router.js';
+export { notFound, redirect } from './http.js';

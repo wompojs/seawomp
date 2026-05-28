@@ -86,4 +86,40 @@ describe('prerender', () => {
     expect(file1).toContain('id=1');
     expect(file2).toContain('id=2');
   });
+
+  it('prerenders static routes with loaders when prerender=true', async () => {
+    write(
+      'docs/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Docs({ data }){ return html\`<article>\${data.title}</article>\`; }
+       defineWompo(Docs, { name: 'ssg-docs-loader' });
+       export default Docs;
+       export const prerender = true;`,
+    );
+    write('docs/loader.ts', `export function loader(){ return { title: 'Markdown doc' }; }`);
+    const routes = scanRoutes(tmpRoot);
+    const r = await prerender({ routes, loadModule, outDir });
+    expect(r.written).toHaveLength(1);
+    expect(r.paths).toEqual(['/docs']);
+    expect(fs.readFileSync(path.join(outDir, 'docs/index.html'), 'utf-8')).toContain('Markdown doc');
+  });
+
+  it('uses generateStaticPaths for dynamic routes', async () => {
+    write(
+      'blog/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function B({ params }){ return html\`<b>id=\${params.id}</b>\`; }
+       defineWompo(B, { name: 'ssg-static-paths' });
+       export default B;
+       export function generateStaticPaths() {
+         return [{ params: { id: 'a' } }, '/blog/b'];
+       }`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    routes[0].pattern = '/blog/:id';
+    const r = await prerender({ routes, loadModule, outDir });
+    expect(r.paths.sort()).toEqual(['/blog/a', '/blog/b']);
+    expect(fs.existsSync(path.join(outDir, 'blog/a/index.html'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'blog/b/index.html'))).toBe(true);
+  });
 });

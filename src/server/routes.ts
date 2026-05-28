@@ -22,10 +22,23 @@ export interface RouteEntry {
   errorPath?: string;
 }
 
+export interface SpecialRouteEntry {
+  /** Absolute path of the special page module (`404.ts` or `error.ts`). */
+  pagePath: string;
+  /** Layouts that wrap this page, currently the root layout when present. */
+  layoutPaths: string[];
+}
+
+export interface SpecialRoutes {
+  notFoundRoute?: SpecialRouteEntry;
+  errorRoute?: SpecialRouteEntry;
+}
+
 const PAGE_RE = /^page\.(ts|tsx|js|jsx)$/;
 const LAYOUT_RE = /^layout\.(ts|tsx|js|jsx)$/;
 const LOADER_RE = /^loader\.(ts|tsx|js|jsx)$/;
 const ERROR_RE = /^error\.(ts|tsx|js|jsx)$/;
+const NOT_FOUND_RE = /^404\.(ts|tsx|js|jsx)$/;
 /** Directory name like `(docs)` — a "route group" that organizes routes without contributing a
  * URL segment AND resets the inherited layout / error-boundary chain so its own `layout.ts`
  * (if any) becomes a new root. */
@@ -100,6 +113,32 @@ export function scanRoutes(appDir: string): RouteEntry[] {
     loaderPath: r.loaderPath ? normalizeSlashes(r.loaderPath) : undefined,
     errorPath: r.errorPath ? normalizeSlashes(r.errorPath) : undefined,
   }));
+}
+
+export function scanSpecialRoutes(appDir: string): SpecialRoutes {
+  if (!fs.existsSync(appDir) || !fs.statSync(appDir).isDirectory()) return {};
+
+  let rootLayout: string | undefined;
+  let notFoundPath: string | undefined;
+  let errorPath: string | undefined;
+
+  for (const ent of fs.readdirSync(appDir, { withFileTypes: true })) {
+    if (!ent.isFile()) continue;
+    const abs = path.join(appDir, ent.name);
+    if (LAYOUT_RE.test(ent.name)) rootLayout = abs;
+    else if (NOT_FOUND_RE.test(ent.name)) notFoundPath = abs;
+    else if (ERROR_RE.test(ent.name)) errorPath = abs;
+  }
+
+  const layoutPaths = rootLayout ? [normalizeSlashes(rootLayout)] : [];
+  return {
+    notFoundRoute: notFoundPath
+      ? { pagePath: normalizeSlashes(notFoundPath), layoutPaths }
+      : undefined,
+    errorRoute: errorPath
+      ? { pagePath: normalizeSlashes(errorPath), layoutPaths }
+      : undefined,
+  };
 }
 
 function routeScore(pattern: string): number {

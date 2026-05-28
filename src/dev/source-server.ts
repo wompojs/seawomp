@@ -34,6 +34,10 @@ export function invalidateSrc(abs?: string): void {
 	else srcCache.clear();
 }
 
+export function invalidateDeps(): void {
+	depCache.clear();
+}
+
 /** Try several extensions for an import like `./foo` that omitted one. */
 async function resolveRelative(fromDir: string, spec: string): Promise<string | null> {
 	// Spec ends with .js (TypeScript convention) → look for the .ts/.tsx counterpart on disk.

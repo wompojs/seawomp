@@ -1,19 +1,26 @@
-/* <seawomp-image> custom element — registration smoke test.
+/* <seawomp-image> Wompo component — smoke tests.
  *
- * Bun's test runner doesn't ship a DOM. Rather than depending on a heavy DOM library to assert
- * the connectedCallback enhancements (which are mechanically straightforward), we just verify
- * the module imports without throwing in a Node-like (no HTMLElement) environment, and exposes
- * the `__SEAWOMP_IMAGES` global typing.
- *
- * The full DOM behavior is exercised end-to-end by `seawomp-test` and the Playwright spec.
+ * Verifies that the module can be imported in both browser-less (SSR) environments and that
+ * the exported component is a valid Wompo component. Full DOM behaviour is covered by the
+ * Playwright e2e spec.
  */
 import { describe, expect, it } from 'bun:test';
 
 describe('<seawomp-image> module', () => {
 	it('imports without throwing in a non-DOM environment', async () => {
-		// Make sure HTMLElement is undefined so the file's DOM guard kicks in (matches SSR).
-		expect((globalThis as any).HTMLElement).toBeUndefined();
 		const mod = await import('../../src/components/image.js');
 		expect(mod).toBeDefined();
+	});
+
+	it('exports a default Wompo component function', async () => {
+		const mod = await import('../../src/components/image.js');
+		expect(typeof mod.default).toBe('function');
+		// defineWompo sets _$wompoF on the function.
+		expect((mod.default as any)._$wompoF).toBe(true);
+	});
+
+	it('exports a componentName of "seawomp-image"', async () => {
+		const mod = await import('../../src/components/image.js');
+		expect((mod.default as any).componentName).toBe('seawomp-image');
 	});
 });

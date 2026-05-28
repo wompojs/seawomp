@@ -1,6 +1,6 @@
 /* Scaffolding for `seawomp new <name>` — emits a minimal but complete starter project that
  * exercises every framework feature: nested layout, page, second page, loader, API route,
- * <seawomp-image>, <seawomp-link>, server action, prerender flag, global CSS.
+ * <seawomp-image>, <seawomp-link>, server action, prerender flag, app-owned CSS.
  *
  * The CLI invokes `scaffoldProject({ dir, name })` which creates the directory, writes the
  * templates, and (optionally) runs `bun install` inside it.
@@ -142,7 +142,7 @@ bun run build:vercel # production build for Vercel
   \`loader.ts\` for async data, \`api/**/route.ts\` for API endpoints.
 - \`public/\` — static assets (auto-optimized at build when \`sharp\` is installed).
 - \`src/server.ts\` — Vercel/Hono adapter entrypoint.
-- \`seawomp.config.ts\` — framework config (title, globalCss, image variants, minify flags).
+- \`seawomp.config.ts\` — framework config (title, image variants, minify flags).
 
 ## Try it
 
@@ -165,7 +165,6 @@ function seawompConfig(name) {
 
 export default defineConfig({
   title: '${name}',
-  globalCss: 'public/global.css',
   port: 5173,
   // Uncomment + \`bun add sharp\` to enable WebP/AVIF generation:
   // images: { sizes: [640, 960, 1280, 1920], formats: ['avif', 'webp'] },
@@ -230,6 +229,10 @@ function RootLayout({ children }: WompoProps) {
 }
 defineWompo(RootLayout, { name: 'app-root-layout' });
 export default RootLayout;
+
+export function head() {
+  return html\`<link rel="stylesheet" href="/global.css">\`;
+}
 `;
 }
 function homePageTs() {
@@ -255,12 +258,12 @@ defineWompo(Home, { name: 'app-home-page' });
 export default Home;
 export const prerender = true;
 
-/* Per-page <head>: return raw HTML. Use \`{ params, data, url }\` for dynamic routes
+/* Per-page <head>: return Wompo RenderHtml output. Use \`{ params, data, url }\` for dynamic routes
  * (the loader's data is passed in, identical to the page component). */
 export function head() {
-  return \`
+  return html\`
     <title>Home — seawomp</title>
-    <meta name="description" content="A seawomp app." />
+    <meta name="description" content="A seawomp app.">
   \`;
 }
 `;

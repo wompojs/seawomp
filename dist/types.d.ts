@@ -1,3 +1,4 @@
+import type { RenderHtml, WompoComponent } from 'wompo';
 export interface LoaderArgs<P extends Record<string, string> = Record<string, string>> {
     params: P;
     request: Request;
@@ -13,6 +14,9 @@ export interface PageProps<T = unknown, P extends Record<string, string> = Recor
 export interface LayoutProps {
     /** The child page rendered inside this layout. */
     children?: unknown;
+    params?: Record<string, string>;
+    data?: unknown;
+    url?: URL;
 }
 export interface RouteMatch<P extends Record<string, string> = Record<string, string>> {
     pattern: string;
@@ -24,12 +28,18 @@ export interface RouteMatch<P extends Record<string, string> = Record<string, st
     errorBoundary?: string;
 }
 export interface PageModule {
-    default: import('wompo').WompoComponent;
+    default: WompoComponent;
     prerender?: boolean | string[];
-    head?: (props: PageProps) => string;
+    generateStaticPaths?: () => StaticPath[] | Promise<StaticPath[]>;
+    head?: (props: PageProps) => RenderHtml | null | undefined;
 }
+export type StaticPath = string | {
+    path?: string;
+    params?: Record<string, string | number | Array<string | number>>;
+};
 export interface LayoutModule {
-    default: import('wompo').WompoComponent;
+    default: WompoComponent;
+    head?: (props: LayoutProps) => RenderHtml | null | undefined;
 }
 export interface LoaderModule {
     loader: Loader;

@@ -1,15 +1,24 @@
 /* Build-time image pipeline.
  *
- * Walks `publicDir/**`, finds raster images (.jpg/.jpeg/.png/.webp), and emits resized variants
- * in the formats listed in `cfg.images.formats` (default AVIF + WebP). The manifest maps each
- * original `/images/foo.jpg` URL to the list of variants — `<seawomp-image>` reads it at runtime
- * (via `window.__SEAWOMP_IMAGES`, injected into `<head>`) and builds srcset automatically.
+ * Handles two categories of images:
  *
- * `sharp` is a peer-optional dep: if it's not installed, we copy the originals verbatim and
- * log a warning. SVGs are always copied unchanged.
+ *   LOCAL  — raster files (.jpg/.jpeg/.png/.webp) found inside `publicDir`. Sharp generates
+ *            resized variants in each requested format (AVIF + WebP by default).
+ *
+ *   REMOTE — URLs (http/https) referenced in `<seawomp-image src="…">` inside any TS/JS
+ *            source file under `appDir`. Each URL is downloaded once, then run through the
+ *            same Sharp optimisation pipeline as local files.
+ *
+ * The resulting manifest maps every original URL / public path to the list of generated
+ * variants. The production handler injects it into `<head>` as `window.__SEAWOMP_IMAGES`
+ * so `<seawomp-image>` can build a `srcset` automatically at runtime.
+ *
+ * `sharp` is a peer-optional dep: if it is not installed, originals are served unchanged and
+ * a warning is logged. SVGs are always copied unchanged.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 const RASTER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const MIME = {
     '.jpg': 'image/jpeg',
@@ -18,7 +27,17 @@ const MIME = {
     '.webp': 'image/webp',
     '.avif': 'image/avif',
 };
-async function tryLoadSharp() {
+async function tryLoadSharp(cwd) {
+    if (cwd) {
+        try {
+            const resolved = Bun.resolveSync('sharp', cwd);
+            const mod = await import(pathToFileURL(resolved).href);
+            return mod.default ?? mod;
+        }
+        catch {
+            /* fall back to seawomp's own resolution context */
+        }
+    }
     try {
         // @ts-ignore - sharp is a peer-optional dependency
         const mod = await import('sharp');
@@ -54,78 +73,221 @@ export async function buildImages(opts) {
     const manifest = {};
     if (opts.images.disabled)
         return { manifest, written: 0 };
-    const files = await walk(opts.publicDir);
-    if (!files.length)
-        return { manifest, written: 0 };
     const imgOut = path.join(opts.outAssetsDir, 'img');
     await fs.mkdir(imgOut, { recursive: true });
-    const sharp = await tryLoadSharp();
+    const sharp = await tryLoadSharp(opts.cwd);
     if (!sharp) {
-        console.warn('[seawomp] `sharp` not installed — skipping image optimization (originals will be served as-is).');
+        console.warn('[seawomp] `sharp` not installed — skipping image optimisation (originals served as-is).');
     }
     let written = 0;
-    for (const abs of files) {
+    // ── Local images ──────────────────────────────────────────────────────────
+    const localFiles = await walk(opts.publicDir);
+    for (const abs of localFiles) {
         const ext = path.extname(abs).toLowerCase();
         const rel = '/' + path.relative(opts.publicDir, abs).split(path.sep).join('/');
         if (!RASTER_EXTS.has(ext))
             continue;
-        if (!sharp) {
-            // No sharp — leave the URL pointing at the original.
+        if (!sharp)
             continue;
-        }
-        const variants = [];
-        let buf;
-        try {
-            buf = await fs.readFile(abs);
-        }
-        catch (err) {
-            console.warn(`[seawomp] could not read ${abs}: ${err.message}`);
+        const buf = await readFileSafe(abs);
+        if (!buf)
             continue;
-        }
-        let metadata;
-        try {
-            metadata = await sharp(buf).metadata();
-        }
-        catch (err) {
-            console.warn(`[seawomp] sharp metadata failed for ${rel}: ${err.message}`);
-            continue;
-        }
-        const intrinsicWidth = metadata.width ?? 0;
-        if (!intrinsicWidth)
-            continue;
-        // Always emit the original-size variant in each requested format (fallback). Then emit
-        // smaller variants that don't exceed the source size — upscaling is wasteful.
-        const targetWidths = [
-            ...new Set([intrinsicWidth, ...opts.images.sizes.filter((w) => w < intrinsicWidth)]),
-        ].sort((a, b) => a - b);
-        const formats = [...opts.images.formats, 'original'];
-        for (const fmt of formats) {
-            for (const w of targetWidths) {
-                const outExt = fmt === 'original' ? ext : '.' + fmt;
-                const stem = path.basename(abs, ext);
-                const outName = `${stem}-${w}${outExt}`;
-                const outAbs = path.join(imgOut, outName);
-                try {
-                    let pipeline = sharp(buf).resize({ width: w, withoutEnlargement: true });
-                    if (fmt === 'webp')
-                        pipeline = pipeline.webp({ quality: 80 });
-                    else if (fmt === 'avif')
-                        pipeline = pipeline.avif({ quality: 60 });
-                    await pipeline.toFile(outAbs);
-                    written++;
-                    variants.push({
-                        src: `${opts.publicPrefix}/${outName}`,
-                        type: MIME[outExt] ?? 'application/octet-stream',
-                        width: w,
-                    });
-                }
-                catch (err) {
-                    console.warn(`[seawomp] sharp encode failed (${rel} → ${fmt}@${w}): ${err.message}`);
-                }
-            }
-        }
+        const variants = await processBuffer(buf, ext, path.basename(abs, ext), sharp, opts, imgOut);
+        written += variants.length;
         if (variants.length)
             manifest[rel] = variants;
     }
+    // ── Remote images ─────────────────────────────────────────────────────────
+    if (opts.appDir) {
+        const remoteUrls = await scanRemoteImageUrls(opts.appDir);
+        for (const url of remoteUrls) {
+            if (manifest[url])
+                continue; // already processed
+            const buf = await downloadImage(url);
+            if (!buf)
+                continue;
+            const ext = guessExtFromUrl(url);
+            if (!RASTER_EXTS.has(ext) && ext !== '') {
+                // Non-raster (e.g. SVG): skip optimisation but still add to manifest as-is.
+                // For simplicity we just skip — SVGs don't need resizing.
+                continue;
+            }
+            const stem = urlToStem(url);
+            if (!sharp) {
+                // Can't optimise; skip manifest entry (browser uses the original URL directly).
+                continue;
+            }
+            const variants = await processBuffer(buf, ext || '.jpg', stem, sharp, opts, imgOut);
+            written += variants.length;
+            if (variants.length)
+                manifest[url] = variants;
+        }
+    }
     return { manifest, written };
+}
+export async function writeOptimizedWebManifest(publicDir, staticDir, imageManifest) {
+    const sourcePath = path.join(publicDir, 'manifest.json');
+    let raw;
+    try {
+        raw = await fs.readFile(sourcePath, 'utf-8');
+    }
+    catch {
+        return false;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch (err) {
+        console.warn(`[seawomp] could not parse public/manifest.json: ${err.message}`);
+        return false;
+    }
+    if (!Array.isArray(parsed.icons))
+        return false;
+    let changed = false;
+    parsed.icons = parsed.icons.map((icon) => {
+        if (!icon || typeof icon.src !== 'string')
+            return icon;
+        const key = normalizePublicImageKey(icon.src);
+        const variants = imageManifest[key];
+        if (!variants?.length)
+            return icon;
+        const requestedWidth = firstWidthFromSizes(icon.sizes);
+        const variant = chooseManifestIconVariant(variants, requestedWidth);
+        if (!variant)
+            return icon;
+        changed = true;
+        return { ...icon, src: variant.src, type: variant.type };
+    });
+    if (!changed)
+        return false;
+    await fs.mkdir(staticDir, { recursive: true });
+    await fs.writeFile(path.join(staticDir, 'manifest.json'), JSON.stringify(parsed, null, 2), 'utf-8');
+    return true;
+}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+async function readFileSafe(abs) {
+    try {
+        return await fs.readFile(abs);
+    }
+    catch (err) {
+        console.warn(`[seawomp] could not read ${abs}: ${err.message}`);
+        return null;
+    }
+}
+async function processBuffer(buf, sourceExt, stem, sharp, opts, imgOut) {
+    let metadata;
+    try {
+        metadata = await sharp(buf).metadata();
+    }
+    catch (err) {
+        console.warn(`[seawomp] sharp metadata failed for ${stem}: ${err.message}`);
+        return [];
+    }
+    const intrinsicWidth = metadata.width ?? 0;
+    if (!intrinsicWidth)
+        return [];
+    const targetWidths = [
+        ...new Set([intrinsicWidth, ...opts.images.sizes.filter((w) => w < intrinsicWidth)]),
+    ].sort((a, b) => a - b);
+    const formats = [...opts.images.formats, 'original'];
+    const variants = [];
+    for (const fmt of formats) {
+        for (const w of targetWidths) {
+            const outExt = fmt === 'original' ? sourceExt : '.' + fmt;
+            const outName = `${stem}-${w}${outExt}`;
+            const outAbs = path.join(imgOut, outName);
+            try {
+                let pipeline = sharp(buf).resize({ width: w, withoutEnlargement: true });
+                if (fmt === 'webp')
+                    pipeline = pipeline.webp({ quality: 80 });
+                else if (fmt === 'avif')
+                    pipeline = pipeline.avif({ quality: 60 });
+                await pipeline.toFile(outAbs);
+                variants.push({
+                    src: `${opts.publicPrefix}/${outName}`,
+                    type: MIME[outExt] ?? 'application/octet-stream',
+                    width: w,
+                });
+            }
+            catch (err) {
+                console.warn(`[seawomp] sharp encode failed (${stem} → ${fmt}@${w}): ${err.message}`);
+            }
+        }
+    }
+    return variants;
+}
+/** Download a remote image and return its buffer. Returns null on network error. */
+async function downloadImage(url) {
+    try {
+        const res = await fetch(url);
+        if (!res.ok) {
+            console.warn(`[seawomp] remote image fetch failed (${res.status}): ${url}`);
+            return null;
+        }
+        const arr = await res.arrayBuffer();
+        return Buffer.from(arr);
+    }
+    catch (err) {
+        console.warn(`[seawomp] could not download ${url}: ${err.message}`);
+        return null;
+    }
+}
+/** Scan TS/JS files under `appDir` for static `src="https://…"` in <seawomp-image> tags. */
+export async function scanRemoteImageUrls(appDir) {
+    const files = await walk(appDir);
+    const urls = new Set();
+    // Match <seawomp-image … src="https://…"> or src='…' inside template literals.
+    // Only static string literals are captured; dynamic expressions (${…}) are skipped.
+    const pattern = /<seawomp-image\b[^`]*?src=["'](https?:\/\/[^"'\s>]+)["']/g;
+    for (const abs of files) {
+        if (!/\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/.test(abs))
+            continue;
+        let src;
+        try {
+            src = await fs.readFile(abs, 'utf-8');
+        }
+        catch {
+            continue;
+        }
+        for (const m of src.matchAll(pattern)) {
+            urls.add(m[1]);
+        }
+    }
+    return [...urls];
+}
+function guessExtFromUrl(url) {
+    const clean = url.split('?')[0].split('#')[0];
+    const ext = path.extname(clean).toLowerCase();
+    return RASTER_EXTS.has(ext) ? ext : '';
+}
+/** Turn a URL into a safe filesystem stem (no slashes or special chars). */
+function urlToStem(url) {
+    return url
+        .replace(/^https?:\/\//, '')
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .slice(0, 80); // cap length to avoid path-too-long errors
+}
+function normalizePublicImageKey(src) {
+    if (/^https?:\/\//i.test(src))
+        return src;
+    const clean = src.split('?')[0].split('#')[0];
+    return clean.startsWith('/') ? clean : '/' + clean;
+}
+function firstWidthFromSizes(sizes) {
+    if (typeof sizes !== 'string')
+        return undefined;
+    const match = sizes.match(/(\d+)x\d+/);
+    return match ? Number(match[1]) : undefined;
+}
+function chooseManifestIconVariant(variants, requestedWidth) {
+    const originals = variants.filter((variant) => variant.type === 'image/png');
+    const pool = originals.length ? originals : variants;
+    if (!requestedWidth)
+        return pool[pool.length - 1];
+    return (pool.find((variant) => variant.width === requestedWidth) ??
+        pool.find((variant) => variant.width >= requestedWidth) ??
+        pool[pool.length - 1]);
 }

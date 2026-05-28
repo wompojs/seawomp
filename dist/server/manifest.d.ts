@@ -17,17 +17,25 @@ export interface ApiManifestEntry {
     modulePath: string;
     serverModulePath?: string;
 }
+export interface SpecialRouteManifestEntry {
+    page: string;
+    layouts: string[];
+    serverPage?: string;
+    serverLayouts?: string[];
+}
 export interface BuildManifest {
     routes: RouteManifestEntry[];
     apiRoutes: ApiManifestEntry[];
     islands: Record<string, string>;
     hydrateRuntime: string;
-    /** Hashed URL of the minified global CSS, when present. */
-    global: {
-        css?: string;
-    };
     /** Image variant map (original URL → list of `{ src, type, width }`). */
     images: Record<string, ImageVariant[]>;
+    /** Build-time framework head fragments, such as discoverability links. */
+    head?: {
+        framework?: string;
+    };
+    notFoundRoute?: SpecialRouteManifestEntry;
+    errorRoute?: SpecialRouteManifestEntry;
 }
 export declare function emptyManifest(): BuildManifest;
 export declare function manifestFromRoutes(routes: RouteEntry[]): BuildManifest;

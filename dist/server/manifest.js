@@ -4,7 +4,6 @@ export function emptyManifest() {
         apiRoutes: [],
         islands: {},
         hydrateRuntime: '/_hydrate.js',
-        global: {},
         images: {},
     };
 }
@@ -19,7 +18,6 @@ export function manifestFromRoutes(routes) {
         apiRoutes: [],
         islands: {},
         hydrateRuntime: '/_hydrate.js',
-        global: {},
         images: {},
     };
 }

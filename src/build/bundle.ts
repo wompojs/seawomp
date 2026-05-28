@@ -4,7 +4,6 @@
  *   <outDir>/server/<*.js>           — server-side bundles of every page/layout/loader/action/api
  *   <outDir>/static/_assets/<*.js>   — client bundles (hashed, minified, code-split)
  *   <outDir>/static/_assets/img/*    — optimized image variants
- *   <outDir>/static/_assets/global-<hash>.css — minified global CSS
  *   <outDir>/static/<route>/index.html — prerendered HTML for prerender:true pages
  *   <outDir>/manifest.json           — route → asset map (BuildManifest)
  *
@@ -14,12 +13,18 @@
 import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { ResolvedConfig } from '../config.js';
-import { scanRoutes } from '../server/routes.js';
+import { scanRoutes, scanSpecialRoutes, type RouteEntry, type SpecialRouteEntry, type SpecialRoutes } from '../server/routes.js';
 import { scanApiRoutes } from '../server/api-router.js';
-import { manifestFromRoutes, serializeManifest, type BuildManifest } from '../server/manifest.js';
-import { minifyCss } from './minify-css.js';
-import { buildImages } from './images.js';
+import { manifestFromRoutes, serializeManifest, type BuildManifest, type SpecialRouteManifestEntry } from '../server/manifest.js';
+import { buildImages, writeOptimizedWebManifest } from './images.js';
+import { createFontBuildContext, localizeGoogleFontsInHtml } from './fonts.js';
+import { postProcessHtml } from './html-postprocess.js';
+import { prerender } from '../server/ssg.js';
+import { writeSitemap } from './sitemap.js';
+import { createHandler } from '../server/handler.js';
+import { discoverabilityHeadTags, writeDiscoverabilityFiles } from './discoverability.js';
 
 const HYDRATE_ENTRY_BASENAME = '_hydrate-entry.ts';
 
@@ -37,52 +42,52 @@ export async function buildAll(
 	const staticDir = path.join(cfg.outDir, 'static');
 	const assetsDir = path.join(staticDir, '_assets');
 	const serverDir = path.join(cfg.outDir, 'server');
+	await cleanBuildOutput(cfg.outDir);
 	await fs.mkdir(assetsDir, { recursive: true });
 	await fs.mkdir(serverDir, { recursive: true });
 
 	const routes = scanRoutes(cfg.appDir);
+	const specialRoutes = scanSpecialRoutes(cfg.appDir);
 	const apiRoutes = scanApiRoutes(cfg.appDir);
 	console.log(
 		`[seawomp] discovered ${routes.length} page route(s), ${apiRoutes.length} api route(s)`,
 	);
+	const fontContext = createFontBuildContext(assetsDir);
+	const frameworkHead = discoverabilityHeadTags(cfg.discoverability);
 
 	// 1) Image pipeline (runs first so the manifest is embedded in the head extra).
+	// Also scans appDir for remote URLs referenced in <seawomp-image src="https://…"> tags.
 	const { manifest: imageManifest, written: imgCount } = await buildImages({
 		publicDir: cfg.publicDir,
 		outAssetsDir: assetsDir,
 		publicPrefix: '/_assets/img',
 		images: cfg.images,
+		cwd,
+		appDir: cfg.appDir,
 	});
 	if (imgCount) console.log(`[seawomp] generated ${imgCount} image variant(s)`);
-
-	// 2) Global CSS — minify and content-hash.
-	let globalCssAssetUrl: string | undefined;
-	if (cfg.globalCss) {
-		try {
-			const raw = await fs.readFile(cfg.globalCss, 'utf-8');
-			const minified = cfg.minify.css ? minifyCss(raw, cfg.globalCss) : raw;
-			const hash = Bun.hash(minified).toString(16).slice(0, 8);
-			const outName = `global-${hash}.css`;
-			await fs.writeFile(path.join(assetsDir, outName), minified, 'utf-8');
-			globalCssAssetUrl = `/_assets/${outName}`;
-		} catch (err) {
-			console.warn(`[seawomp] could not process globalCss: ${(err as Error).message}`);
-		}
+	if (await writeOptimizedWebManifest(cfg.publicDir, staticDir, imageManifest)) {
+		console.log('[seawomp] generated optimized manifest.json');
 	}
 
-	// 3) Write a tiny hydrate entry to a tmp file under <outDir> so Bun.build can ingest it
+	// 2) Write a tiny hydrate entry to a tmp file under <outDir> so Bun.build can ingest it
 	//    alongside the route modules.
+	const clientEntryMap = await writeClientEntryProxies(cfg.outDir, routes);
 	const hydrateEntryAbs = path.join(cfg.outDir, HYDRATE_ENTRY_BASENAME);
-	const hydrateEntrySource = generateHydrateEntrySource(routes);
+	const hydrateEntrySource = generateHydrateEntrySource(
+		routes,
+		cfg.i18n,
+		cfg.navigation,
+		clientEntryMap,
+	);
 	await fs.writeFile(hydrateEntryAbs, hydrateEntrySource, 'utf-8');
 
-	// 4) Client bundle — every page/layout + the hydrate entry. Code-split so shared imports
+	// 3) Client bundle — every page/layout + the hydrate entry. Code-split so shared imports
 	//    (wompo, seawomp/client) collapse into common chunks.
 	const clientEntries = Array.from(
 		new Set([
 			hydrateEntryAbs,
-			...routes.map((r) => r.pagePath),
-			...routes.flatMap((r) => r.layoutPaths),
+			...clientEntryMap.values(),
 		]),
 	);
 
@@ -107,23 +112,15 @@ export async function buildAll(
 	}
 	console.log(`[seawomp] client bundle: ${clientResult.outputs.length} file(s)`);
 
-	// Build a map from source abs path → emitted asset URL.
-	const clientAssetByEntry = new Map<string, string>();
-	for (const o of clientResult.outputs) {
-		if (o.kind !== 'entry-point') continue;
-		const entryPath = (o as any).sourcemapFile ? undefined : ((o as any).inputPath ?? null);
-		// `Bun.build` doesn't expose the entrypoint per output reliably; use path basename to match.
-		const stem = path.basename(o.path).split('-')[0];
-		if (entryPath) clientAssetByEntry.set(entryPath, '/_assets/' + path.basename(o.path));
-		else {
-			// Fallback: match by stem against entrypoints.
-			const guess = clientEntries.find((e) => path.basename(e, path.extname(e)) === stem);
-			if (guess && !clientAssetByEntry.has(guess))
-				clientAssetByEntry.set(guess, '/_assets/' + path.basename(o.path));
-		}
-	}
+	const clientAssetByEntry = mapClientEntryOutputs(clientResult.outputs, clientEntries);
+	const hydrateRuntime = clientAssetByEntry.get(hydrateEntryAbs) ?? '/_hydrate.js';
+	await rewriteHydrateRuntimeImports(
+		path.join(staticDir, hydrateRuntime.replace(/^\//, '')),
+		clientEntryMap,
+		clientAssetByEntry,
+	);
 
-	// 5) Server bundle — each route module compiled for Bun runtime.
+	// 4) Server bundle — each route module compiled for Bun runtime.
 	const serverEntries = Array.from(
 		new Set([
 			...routes.map((r) => r.pagePath),
@@ -131,6 +128,7 @@ export async function buildAll(
 			...routes.flatMap((r) => (r.loaderPath ? [r.loaderPath] : [])),
 			...routes.flatMap((r) => (r.errorPath ? [r.errorPath] : [])),
 			...apiRoutes.map((r) => r.modulePath),
+			...specialRoutePaths(specialRoutes),
 		]),
 	);
 	if (serverEntries.length) {
@@ -155,7 +153,7 @@ export async function buildAll(
 		console.log(`[seawomp] server bundle: ${serverResult.outputs.length} file(s)`);
 	}
 
-	// 6) Write the manifest.
+	// 5) Write the manifest.
 	const manifest: BuildManifest = {
 		...manifestFromRoutes(routes),
 		routes: routes.map((r) => ({
@@ -184,10 +182,63 @@ export async function buildAll(
 				mapToServerBundle(cwd, serverDir, r.modulePath),
 			),
 		})),
-		global: { css: globalCssAssetUrl },
+		hydrateRuntime,
 		images: imageManifest,
+		head: { framework: frameworkHead },
+		notFoundRoute: specialRoutes.notFoundRoute
+			? specialRouteToManifest(cwd, cfg.outDir, serverDir, specialRoutes.notFoundRoute)
+			: undefined,
+		errorRoute: specialRoutes.errorRoute
+			? specialRouteToManifest(cwd, cfg.outDir, serverDir, specialRoutes.errorRoute)
+			: undefined,
 	};
 	await fs.writeFile(path.join(cfg.outDir, 'manifest.json'), serializeManifest(manifest), 'utf-8');
+
+	// 6) Static HTML generation for routes that opt into build-time rendering.
+	const ssgRoutes = routes.map((r) => mapRouteToServerRoute(cwd, serverDir, r));
+	const ssgSpecialRoutes = mapSpecialRoutesToServer(cwd, serverDir, specialRoutes);
+	const ssgFrameworkHead = composeFrameworkHead(manifest, frameworkHead);
+	const transformHtml = async (html: string) =>
+		postProcessHtml(await localizeGoogleFontsInHtml(html, fontContext), {
+			minify: cfg.minify.html,
+			optimizeLcp: true,
+		});
+	const ssg = await prerender({
+		routes: ssgRoutes,
+		loadModule: importFile,
+		outDir: staticDir,
+		frameworkHead: ssgFrameworkHead,
+		hydrateScript: manifest.hydrateRuntime,
+		title: cfg.title,
+		cwd,
+		redirects: cfg.redirects,
+		notFoundRoute: ssgSpecialRoutes.notFoundRoute,
+		errorRoute: ssgSpecialRoutes.errorRoute,
+		transformHtml,
+	});
+	if (ssg.written.length) console.log(`[seawomp] prerendered ${ssg.written.length} page(s)`);
+	for (const skip of ssg.skipped) {
+		console.warn(`[seawomp] skipped prerender ${skip.pattern}: ${skip.reason}`);
+	}
+	await renderStaticNotFound({
+		routes: ssgRoutes,
+		specialRoutes: ssgSpecialRoutes,
+		loadModule: importFile,
+		staticDir,
+		frameworkHead: ssgFrameworkHead,
+		hydrateScript: manifest.hydrateRuntime,
+		title: cfg.title,
+		cwd,
+		transformHtml,
+	});
+	const sitemap = await writeSitemap(staticDir, cfg.siteUrl, ssg.paths);
+	if (sitemap) console.log('[seawomp] generated sitemap.xml');
+	const discoverabilityFiles = await writeDiscoverabilityFiles(staticDir, cfg, ssg.paths);
+	if (discoverabilityFiles.length) {
+		console.log(`[seawomp] generated ${discoverabilityFiles.length} discoverability file(s)`);
+	}
+
+	if (fontContext.written) console.log(`[seawomp] localized ${fontContext.written} font asset(s)`);
 
 	// 7) Vercel static output includes public/ files because production functions should not
 	// depend on serving them from the source tree.
@@ -198,6 +249,7 @@ export async function buildAll(
 
 	// 8) Cleanup temp hydrate entry.
 	await fs.unlink(hydrateEntryAbs).catch(() => {});
+	await removePath(path.join(cfg.outDir, 'client-entries')).catch(() => {});
 
 	const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
 	console.log(
@@ -217,6 +269,189 @@ function toOutDirRelative(outDir: string, abs: string): string {
 
 function normalizeOutputPath(p: string): string {
 	return p.split(path.sep).join('/');
+}
+
+async function cleanBuildOutput(outDir: string): Promise<void> {
+	await Promise.all(
+		['static', 'server', 'client-entries'].map((entry) =>
+			removePath(path.join(outDir, entry)),
+		),
+	);
+}
+
+async function removePath(abs: string): Promise<void> {
+	let stat;
+	try {
+		stat = await fs.lstat(abs);
+	} catch (err: any) {
+		if (err?.code === 'ENOENT') return;
+		throw err;
+	}
+	if (stat.isDirectory() && !stat.isSymbolicLink()) {
+		const entries = await fs.readdir(abs);
+		await Promise.all(entries.map((entry) => removePath(path.join(abs, entry))));
+		await fs.rmdir(abs);
+		return;
+	}
+	await fs.unlink(abs);
+}
+
+async function writeClientEntryProxies(
+	outDir: string,
+	routes: RouteEntry[],
+): Promise<Map<string, string>> {
+	const proxyDir = path.join(outDir, 'client-entries');
+	await fs.rm(proxyDir, { recursive: true, force: true }).catch(() => {});
+	await fs.mkdir(proxyDir, { recursive: true });
+
+	const sourcePaths = Array.from(
+		new Set([...routes.map((r) => r.pagePath), ...routes.flatMap((r) => r.layoutPaths)]),
+	);
+	const out = new Map<string, string>();
+	for (let i = 0; i < sourcePaths.length; i++) {
+		const source = sourcePaths[i];
+		const kind = source.endsWith('/layout.ts') || source.endsWith('/layout.tsx') ? 'layout' : 'page';
+		const proxyPath = path.join(proxyDir, `route-${i}-${kind}.ts`);
+		const importPath = relativeImportSpecifier(path.dirname(proxyPath), source);
+		await fs.writeFile(proxyPath, `import ${JSON.stringify(importPath)};\nexport {};\n`, 'utf-8');
+		out.set(source, proxyPath);
+	}
+	return out;
+}
+
+function relativeImportSpecifier(fromDir: string, target: string): string {
+	let rel = path.relative(fromDir, target).split(path.sep).join('/');
+	if (!rel.startsWith('.')) rel = './' + rel;
+	return rel;
+}
+
+function mapClientEntryOutputs(
+	outputs: Array<{ kind: string; path: string }>,
+	entrypoints: string[],
+): Map<string, string> {
+	const byEntry = new Map<string, string>();
+	for (const entry of entrypoints) {
+		const stem = path.basename(entry, path.extname(entry));
+		const output = outputs.find(
+			(o) => o.kind === 'entry-point' && path.basename(o.path).startsWith(`${stem}-`),
+		);
+		if (output) byEntry.set(entry, '/_assets/' + path.basename(output.path));
+	}
+	return byEntry;
+}
+
+async function rewriteHydrateRuntimeImports(
+	hydratePath: string,
+	sourceToProxy: Map<string, string>,
+	proxyToAsset: Map<string, string>,
+): Promise<void> {
+	let code = await fs.readFile(hydratePath, 'utf-8');
+	for (const proxyPath of sourceToProxy.values()) {
+		const asset = proxyToAsset.get(proxyPath);
+		if (!asset) throw new Error(`missing client asset for ${proxyPath}`);
+		code = code.split(JSON.stringify(proxyPath)).join(JSON.stringify(asset));
+	}
+	await fs.writeFile(hydratePath, code, 'utf-8');
+}
+
+function specialRoutePaths(specialRoutes: SpecialRoutes): string[] {
+	return [
+		...(specialRoutes.notFoundRoute
+			? [specialRoutes.notFoundRoute.pagePath, ...specialRoutes.notFoundRoute.layoutPaths]
+			: []),
+		...(specialRoutes.errorRoute
+			? [specialRoutes.errorRoute.pagePath, ...specialRoutes.errorRoute.layoutPaths]
+			: []),
+	];
+}
+
+function specialRouteToManifest(
+	cwd: string,
+	outDir: string,
+	serverDir: string,
+	route: SpecialRouteEntry,
+): SpecialRouteManifestEntry {
+	return {
+		page: route.pagePath,
+		layouts: route.layoutPaths,
+		serverPage: toOutDirRelative(outDir, mapToServerBundle(cwd, serverDir, route.pagePath)),
+		serverLayouts: route.layoutPaths.map((p) =>
+			toOutDirRelative(outDir, mapToServerBundle(cwd, serverDir, p)),
+		),
+	};
+}
+
+function mapRouteToServerRoute(cwd: string, serverDir: string, route: RouteEntry): RouteEntry {
+	return {
+		...route,
+		pagePath: mapToServerBundle(cwd, serverDir, route.pagePath),
+		layoutPaths: route.layoutPaths.map((p) => mapToServerBundle(cwd, serverDir, p)),
+		loaderPath: route.loaderPath ? mapToServerBundle(cwd, serverDir, route.loaderPath) : undefined,
+		errorPath: route.errorPath ? mapToServerBundle(cwd, serverDir, route.errorPath) : undefined,
+	};
+}
+
+function mapSpecialRoutesToServer(
+	cwd: string,
+	serverDir: string,
+	specialRoutes: SpecialRoutes,
+): SpecialRoutes {
+	return {
+		notFoundRoute: mapSpecialRouteToServer(cwd, serverDir, specialRoutes.notFoundRoute),
+		errorRoute: mapSpecialRouteToServer(cwd, serverDir, specialRoutes.errorRoute),
+	};
+}
+
+function mapSpecialRouteToServer(
+	cwd: string,
+	serverDir: string,
+	route: SpecialRouteEntry | undefined,
+): SpecialRouteEntry | undefined {
+	if (!route) return undefined;
+	return {
+		pagePath: mapToServerBundle(cwd, serverDir, route.pagePath),
+		layoutPaths: route.layoutPaths.map((p) => mapToServerBundle(cwd, serverDir, p)),
+	};
+}
+
+function composeFrameworkHead(manifest: BuildManifest, frameworkHead: string | undefined): string {
+	let out = frameworkHead ?? '';
+	if (manifest.images && Object.keys(manifest.images).length) {
+		out += `<script>window.__SEAWOMP_IMAGES=${JSON.stringify(manifest.images)};</script>`;
+	}
+	return out;
+}
+
+async function importFile(abs: string): Promise<unknown> {
+	return import(pathToFileURL(abs).href);
+}
+
+async function renderStaticNotFound(opts: {
+	routes: RouteEntry[];
+	specialRoutes: SpecialRoutes;
+	loadModule: (abs: string) => Promise<unknown>;
+	staticDir: string;
+	frameworkHead?: string;
+	hydrateScript: string;
+	title?: string;
+	cwd: string;
+	transformHtml: (html: string) => string | Promise<string>;
+}): Promise<void> {
+	if (!opts.specialRoutes.notFoundRoute) return;
+	const handler = createHandler({
+		routes: opts.routes,
+		loadModule: opts.loadModule,
+		title: opts.title,
+		frameworkHead: opts.frameworkHead,
+		hydrateScript: opts.hydrateScript,
+		cwd: opts.cwd,
+		notFoundRoute: opts.specialRoutes.notFoundRoute,
+		errorRoute: opts.specialRoutes.errorRoute,
+	});
+	const res = await handler(new Request('http://localhost/__seawomp_404__'));
+	if (res.status !== 404) return;
+	const html = await opts.transformHtml(await res.text());
+	await fs.writeFile(path.join(opts.staticDir, '404.html'), html, 'utf-8');
 }
 
 async function copyPublicToStatic(publicDir: string, staticDir: string): Promise<number> {
@@ -258,17 +493,32 @@ async function copyPublicToStatic(publicDir: string, staticDir: string): Promise
  * simple: import seawomp/client + register the route table referencing the source paths and
  * let the runtime bootstrap fall back to them. Once the manifest is written, downstream
  * consumers can override at runtime. */
-function generateHydrateEntrySource(routes: ReturnType<typeof scanRoutes>): string {
+function generateHydrateEntrySource(
+	routes: ReturnType<typeof scanRoutes>,
+	i18n: ResolvedConfig['i18n'],
+	navigation: ResolvedConfig['navigation'],
+	clientEntryMap: Map<string, string>,
+): string {
 	const records = routes.map((r) => ({
 		pattern: r.pattern,
-		page: r.pagePath,
-		layouts: r.layoutPaths,
+		page: clientEntryMap.get(r.pagePath) ?? r.pagePath,
+		layouts: r.layoutPaths.map((p) => clientEntryMap.get(p) ?? p),
 	}));
+	const i18nConfig = i18n ? JSON.stringify(i18n) : 'null';
+	const routerOptionsValue = {
+		...(i18n ? { i18n } : {}),
+		...(navigation ? { viewTransitions: navigation.viewTransitions } : {}),
+	};
+	const routerOptions = Object.keys(routerOptionsValue).length
+		? `setRouterOptions(${JSON.stringify(routerOptionsValue)});`
+		: '';
 	return `\
-import { hydrate, setRoutes } from 'seawomp/client';
+import { hydrate, setRoutes, setRouterOptions } from 'seawomp/client';
 
 const routes = ${JSON.stringify(records)};
+const i18nConfig = ${i18nConfig};
 setRoutes(routes);
+${routerOptions}
 
 function compile(pattern) {
   const parts = pattern.split('/').map((seg) => {
@@ -280,8 +530,19 @@ function compile(pattern) {
   return new RegExp('^' + parts.join('/') + '/?$');
 }
 
+function stripLocalePrefix(pathname) {
+  if (!i18nConfig) return pathname;
+  const first = pathname.split('/').filter(Boolean)[0];
+  const locale = first && i18nConfig.locales.includes(first) ? first : i18nConfig.defaultLocale;
+  if (locale === i18nConfig.defaultLocale) return pathname;
+  const prefix = '/' + locale;
+  if (pathname === prefix) return '/';
+  if (pathname.startsWith(prefix + '/')) return pathname.slice(prefix.length);
+  return pathname;
+}
+
 async function bootstrap() {
-  const p = location.pathname;
+  const p = stripLocalePrefix(location.pathname);
   for (const r of routes) {
     if (compile(r.pattern).test(p)) {
       for (const layout of r.layouts) await import(layout);

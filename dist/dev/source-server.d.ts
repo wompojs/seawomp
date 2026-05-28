@@ -1,4 +1,5 @@
 export declare function invalidateSrc(abs?: string): void;
+export declare function invalidateDeps(): void;
 /** Serve /_src/<abs>: read, transpile, rewrite imports, cache. */
 export declare function serveSrc(absPath: string, cwd: string): Promise<{
     code: string;

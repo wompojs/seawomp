@@ -1,32 +1,40 @@
-/* <seawomp-image> — built-in optimized image component.
+/* <seawomp-image> — built-in optimised image component, implemented as a Wompo component.
  *
- * SSR: emits the tag inalterato (browsers tolerate unknown elements; SEO sees `<seawomp-image>`
- * with the user-provided children).
+ * SSR: renders a full `<span.seawomp-image__wrap> > <img>` tree server-side so crawlers see
+ * the real markup and no layout shift occurs.
  *
- * Client: on connect, builds a `<span class="seawomp-image__wrap">` wrapper + a solid placeholder
- * + the real `<img>`. Lazy loading + async decoding by default; `priority` flips to eager +
- * fetchpriority=high for above-the-fold imagery. When the build pipeline generated variants,
- * the global `window.__SEAWOMP_IMAGES` map (injected by the prod handler into `<head>`) supplies
- * the srcset automatically.
+ * Client: hydrates as a Wompo custom element. Tracks the `load` event via state; also checks
+ * `img.complete` on mount so images served from the browser cache are never stuck showing the
+ * placeholder.
  *
- * Attributes:
+ * Build-time variant manifest: when `window.__SEAWOMP_IMAGES` is populated by the production
+ * handler (injected into `<head>`), the component builds a `srcset` automatically from the
+ * list of resized / reformatted variants the build pipeline generated.
+ *
+ * Attributes / Props:
  *   src         — required
- *   alt         — required for a11y
- *   srcset      — passes through; auto-populated from __SEAWOMP_IMAGES when present
+ *   alt         — required for a11y (warns when absent)
+ *   srcset      — passes through; auto-populated from __SEAWOMP_IMAGES when not provided
  *   sizes       — passes through
  *   width/height — used to reserve aspect-ratio space
- *   ratio       — CSS aspect-ratio fallback (e.g. "4/3") when width/height not provided
- *   priority    — boolean; eager + fetchpriority=high + decoding=sync
+ *   ratio       — CSS aspect-ratio override (e.g. "4/3") when width/height are not provided
+ *   priority    — boolean; eager loading + fetchpriority=high + decoding=sync
  *   placeholder — "blur" | "none"; default "blur"
  *
- * Styling lives in the app's global CSS (the framework ships no CSS):
+ * Required global CSS (ship your own, the framework emits none):
  *   .seawomp-image__wrap { position: relative; display: block; overflow: hidden; }
- *   .seawomp-image__placeholder { position: absolute; inset: 0; background: var(--placeholder,#e5e5e5); transition: opacity 240ms; }
+ *   .seawomp-image__placeholder { position: absolute; inset: 0; background: var(--placeholder, #e5e5e5); transition: opacity 240ms; }
  *   .seawomp-image__wrap img { width: 100%; height: 100%; object-fit: cover; }
  *   .seawomp-image--loaded .seawomp-image__placeholder { opacity: 0; }
  */
-
-export {}; // ensure ESM
+import {
+	defineWompo,
+	html,
+	useState,
+	useEffect,
+	useRef,
+	type WompoProps,
+} from 'wompo';
 
 declare global {
 	interface Window {
@@ -35,61 +43,75 @@ declare global {
 	}
 }
 
-if (typeof HTMLElement !== 'undefined') {
-	class SeawompImage extends HTMLElement {
-		static observedAttributes = ['src', 'srcset', 'sizes', 'alt'];
-
-		connectedCallback(): void {
-			if (this.querySelector('img')) return; // already enhanced (HMR / SPA nav)
-
-			const src = this.getAttribute('src');
-			const alt = this.getAttribute('alt') ?? '';
-			let srcset = this.getAttribute('srcset') ?? '';
-			const sizes = this.getAttribute('sizes') ?? '';
-			const width = this.getAttribute('width');
-			const height = this.getAttribute('height');
-			const ratio = this.getAttribute('ratio');
-			const priority = this.hasAttribute('priority');
-			const placeholder = (this.getAttribute('placeholder') ?? 'blur') as 'blur' | 'none';
-
-			if (!alt && typeof console !== 'undefined') {
-				console.warn('[seawomp-image] missing `alt` attribute on', src);
-			}
-
-			// Build-time variants override an empty srcset (the user can still hand-pin srcset to skip).
-			if (!srcset && src && typeof window !== 'undefined' && window.__SEAWOMP_IMAGES?.[src]) {
-				srcset = window.__SEAWOMP_IMAGES[src].map((v) => `${v.src} ${v.width}w`).join(', ');
-			}
-
-			const wrapper = document.createElement('span');
-			wrapper.className = 'seawomp-image__wrap';
-			if (ratio) wrapper.style.aspectRatio = ratio;
-			else if (width && height) wrapper.style.aspectRatio = `${width} / ${height}`;
-
-			if (placeholder !== 'none') {
-				const ph = document.createElement('span');
-				ph.className = 'seawomp-image__placeholder';
-				wrapper.appendChild(ph);
-			}
-
-			const img = document.createElement('img');
-			img.alt = alt;
-			img.decoding = priority ? 'sync' : 'async';
-			img.loading = priority ? 'eager' : 'lazy';
-			if (priority) img.setAttribute('fetchpriority', 'high');
-			if (srcset) img.srcset = srcset;
-			if (sizes) img.sizes = sizes;
-			if (width) img.width = Number(width);
-			if (height) img.height = Number(height);
-			img.addEventListener('load', () => wrapper.classList.add('seawomp-image--loaded'));
-			if (src) img.src = src;
-			wrapper.appendChild(img);
-
-			this.appendChild(wrapper);
-		}
-	}
-
-	if (typeof customElements !== 'undefined' && !customElements.get('seawomp-image')) {
-		customElements.define('seawomp-image', SeawompImage);
-	}
+export interface SeawompImageProps extends WompoProps {
+	src?: string;
+	alt?: string;
+	srcset?: string;
+	sizes?: string;
+	width?: number | string;
+	height?: number | string;
+	/** CSS aspect-ratio value (e.g. "16/9"). Overrides width/height for ratio reservation. */
+	ratio?: string;
+	/** Eager loading + fetchpriority=high. Use for above-the-fold images. */
+	priority?: boolean;
+	/** "blur" shows a solid-colour placeholder until the image loads. "none" omits it. */
+	placeholder?: 'blur' | 'none';
 }
+
+function SeawompImage({
+	src = '',
+	alt = '',
+	srcset: srcsetProp = '',
+	sizes = '',
+	width,
+	height,
+	ratio,
+	priority = false,
+	placeholder = 'blur',
+}: SeawompImageProps) {
+	const [loaded, setLoaded] = useState(false);
+	const imgRef = useRef<HTMLImageElement | null>(null);
+
+	if (!alt && src && typeof console !== 'undefined') {
+		console.warn('[seawomp-image] missing `alt` attribute on', src);
+	}
+
+	// Auto-populate srcset from the build-time manifest when not explicitly provided.
+	let srcset = srcsetProp;
+	if (!srcset && src && typeof window !== 'undefined' && window.__SEAWOMP_IMAGES?.[src]) {
+		srcset = window.__SEAWOMP_IMAGES[src].map((v) => `${v.src} ${v.width}w`).join(', ');
+	}
+
+	// After client mount: if the image was already in the cache the `load` event never fires.
+	useEffect(() => {
+		if (imgRef.current?.complete) setLoaded(true);
+	}, []);
+
+	const aspectRatio = ratio ?? (width && height ? `${width} / ${height}` : undefined);
+	const wrapClass = `seawomp-image__wrap${loaded ? ' seawomp-image--loaded' : ''}`;
+
+	return html`
+		<span
+			class="${wrapClass}"
+			style="${aspectRatio ? `aspect-ratio: ${aspectRatio}` : undefined}"
+		>
+			${placeholder !== 'none' ? html`<span class="seawomp-image__placeholder"></span>` : null}
+			<img
+				ref="${imgRef}"
+				src="${src || undefined}"
+				alt="${alt}"
+				decoding="${priority ? 'sync' : 'async'}"
+				loading="${priority ? 'eager' : 'lazy'}"
+				fetchpriority="${priority ? 'high' : undefined}"
+				srcset="${srcset || undefined}"
+				sizes="${sizes || undefined}"
+				width="${width}"
+				height="${height}"
+				@load="${() => setLoaded(true)}"
+			/>
+		</span>
+	`;
+}
+
+defineWompo(SeawompImage, { name: 'seawomp-image' });
+export default SeawompImage;

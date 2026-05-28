@@ -10,5 +10,16 @@ export interface RouteEntry {
     /** Absolute path of the nearest `error.ts`. */
     errorPath?: string;
 }
+export interface SpecialRouteEntry {
+    /** Absolute path of the special page module (`404.ts` or `error.ts`). */
+    pagePath: string;
+    /** Layouts that wrap this page, currently the root layout when present. */
+    layoutPaths: string[];
+}
+export interface SpecialRoutes {
+    notFoundRoute?: SpecialRouteEntry;
+    errorRoute?: SpecialRouteEntry;
+}
 /** Scan an `app/` directory tree and return the discovered routes. */
 export declare function scanRoutes(appDir: string): RouteEntry[];
+export declare function scanSpecialRoutes(appDir: string): SpecialRoutes;

@@ -42,15 +42,14 @@ function writeManifest(partial: Partial<BuildManifest>) {
 		apiRoutes: [],
 		islands: {},
 		hydrateRuntime: '/_hydrate.js',
-		global: {},
 		images: {},
 		...partial,
 	};
 	write('.seawomp/manifest.json', JSON.stringify(manifest, null, 2));
 }
 
-async function prodHandler() {
-	const cfg = resolveConfig(tmpRoot, { outDir: '.seawomp', publicDir: 'public' }, 'build');
+async function prodHandler(config = {}) {
+	const cfg = resolveConfig(tmpRoot, { outDir: '.seawomp', publicDir: 'public', ...config }, 'build');
 	return createProdHandler(cfg, tmpRoot);
 }
 
@@ -61,13 +60,19 @@ describe('createProdHandler', () => {
 		write('.seawomp/static/about/index.html', '<h1>about-static</h1>');
 
 		const handler = await prodHandler();
-		const asset = await handler(new Request('http://x/_assets/app.js'));
+		const asset = await handler(
+			new Request('http://x/_assets/app.js', {
+				headers: { 'accept-encoding': 'br' },
+			}),
+		);
 		expect(asset.status).toBe(200);
 		expect(asset.headers.get('content-type')).toBe('application/javascript');
-		expect(await asset.text()).toContain('asset');
+		expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+		expect(asset.headers.get('content-encoding')).toBe('br');
 
 		const page = await handler(new Request('http://x/about'));
 		expect(page.status).toBe(200);
+		expect(page.headers.get('cache-control')).toBe('public, max-age=3600');
 		expect(await page.text()).toContain('about-static');
 	});
 
@@ -140,6 +145,39 @@ describe('createProdHandler', () => {
 		const handler = await prodHandler();
 		const res = await handler(new Request('http://x/not-found'));
 		expect(res.status).toBe(404);
+	});
+
+	it('applies redirects before serving static files', async () => {
+		writeManifest({});
+		write('.seawomp/static/old.txt', 'old');
+		const handler = await prodHandler({
+			redirects: [{ source: '/old.txt', destination: '/new.txt', status: 308 }],
+		});
+		const res = await handler(new Request('http://x/old.txt'));
+		expect(res.status).toBe(308);
+		expect(res.headers.get('location')).toBe('/new.txt');
+	});
+
+	it('renders bundled app/404.ts for unknown routes', async () => {
+		write(
+			'.seawomp/server/app/404.js',
+			`import { html, defineWompo } from 'wompo';
+       function NotFound(){ return html\`<h1>prod 404</h1>\`; }
+       defineWompo(NotFound, { name: 'prod-not-found' });
+       export default NotFound;`,
+		);
+		writeManifest({
+			notFoundRoute: {
+				page: 'app/404.ts',
+				layouts: [],
+				serverPage: 'server/app/404.js',
+				serverLayouts: [],
+			},
+		});
+		const handler = await prodHandler();
+		const res = await handler(new Request('http://x/nope'));
+		expect(res.status).toBe(404);
+		expect(await res.text()).toContain('prod 404');
 	});
 
 	it('exposes the production handler through the Vercel Hono adapter', async () => {

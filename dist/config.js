@@ -3,7 +3,7 @@
  * Apps export their config via `seawomp.config.ts`:
  *
  *   import { defineConfig } from 'seawomp/config';
- *   export default defineConfig({ title: 'My App', globalCss: 'public/global.css' });
+ *   export default defineConfig({ title: 'My App' });
  *
  * `loadConfig(cwd)` finds and imports it; missing file → empty config (all defaults).
  */
@@ -36,12 +36,7 @@ export function resolveConfig(cwd, cfg, mode) {
         port: cfg.port ?? 5173,
         outDir: path.resolve(cwd, cfg.outDir ?? '.seawomp'),
         title: cfg.title,
-        globalCss: cfg.globalCss
-            ? path.isAbsolute(cfg.globalCss)
-                ? cfg.globalCss
-                : path.resolve(cwd, cfg.globalCss)
-            : undefined,
-        headExtra: cfg.headExtra,
+        siteUrl: cfg.siteUrl,
         images: {
             sizes: cfg.images?.sizes ?? [640, 960, 1280, 1920],
             formats: cfg.images?.formats ?? ['avif', 'webp'],
@@ -52,5 +47,16 @@ export function resolveConfig(cwd, cfg, mode) {
             css: cfg.minify?.css ?? prod,
             html: cfg.minify?.html ?? prod,
         },
+        navigation: {
+            viewTransitions: cfg.navigation?.viewTransitions ?? true,
+        },
+        discoverability: {
+            llmsTxt: cfg.discoverability?.llmsTxt,
+            llmsLink: cfg.discoverability?.llmsLink ?? Boolean(cfg.discoverability?.llmsTxt),
+            sitemapTxt: cfg.discoverability?.sitemapTxt ?? false,
+            robotsTxt: cfg.discoverability?.robotsTxt,
+        },
+        i18n: cfg.i18n,
+        redirects: cfg.redirects ?? [],
     };
 }
