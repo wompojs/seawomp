@@ -1,5 +1,5 @@
 import { getWompoRuntime } from './wompo-runtime.js';
-import { setActiveSsrLocale } from '../i18n/context.js';
+import { setActiveSsrLocale, setActiveSsrPath } from '../i18n/context.js';
 import { getLocale } from '../i18n/index.js';
 let pageRootCounter = 0;
 let headRootCounter = 0;
@@ -47,9 +47,17 @@ async function renderLoadedModuleToStream(input) {
     ]);
     const localeValue = computeLocaleValue(i18n, props);
     const releaseLocale = localeValue ? setActiveSsrLocale(localeValue) : null;
+    const pathname = props.url?.pathname;
+    const releasePath = pathname ? setActiveSsrPath(pathname) : null;
     const PageRoot = makePageRoot(runtime, Page, layouts);
     const rawBody = await runtime.renderToStream(PageRoot, props);
-    const body = releaseLocale ? withCleanup(rawBody, releaseLocale) : rawBody;
+    const cleanup = releaseLocale || releasePath
+        ? () => {
+            releasePath?.();
+            releaseLocale?.();
+        }
+        : null;
+    const body = cleanup ? withCleanup(rawBody, cleanup) : rawBody;
     return { body, head: headFragment };
 }
 function withCleanup(source, cleanup) {

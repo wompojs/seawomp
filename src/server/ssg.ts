@@ -14,6 +14,7 @@ import { createHandler } from './handler.js';
 import type { RouteEntry, SpecialRouteEntry } from './routes.js';
 import type { RedirectRule } from '../config.js';
 import type { PageModule, StaticPath } from '../types.js';
+import { localizeUrl, type I18nConfig } from '../i18n/index.js';
 
 export interface SsgOptions {
   routes: RouteEntry[];
@@ -27,6 +28,9 @@ export interface SsgOptions {
   redirects?: RedirectRule[];
   notFoundRoute?: SpecialRouteEntry;
   errorRoute?: SpecialRouteEntry;
+  /** When set, locale prefixes are stripped before route matching and static
+   * `prerender = true` routes are emitted once per configured locale. */
+  i18n?: I18nConfig;
   transformHtml?: (html: string, pathname: string) => string | Promise<string>;
 }
 
@@ -48,6 +52,7 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
     redirects: opts.redirects,
     notFoundRoute: opts.notFoundRoute,
     errorRoute: opts.errorRoute,
+    i18n: opts.i18n,
   });
 
   const written: string[] = [];
@@ -57,8 +62,8 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
   for (const route of opts.routes) {
     const pageMod = (await opts.loadModule(route.pagePath)) as PageModule;
     const flag = pageMod.prerender;
-    const paths = await staticPathsForRoute(route, pageMod);
-    if (!paths) {
+    const basePaths = await staticPathsForRoute(route, pageMod);
+    if (!basePaths) {
       if (flag === true && /:|\*/.test(route.pattern)) {
         skipped.push({
           pattern: route.pattern,
@@ -69,6 +74,13 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
       }
       continue;
     }
+
+    // A static `prerender = true` route is locale-agnostic: the same page serves every locale,
+    // so emit it once per configured locale (default unprefixed, others prefixed). Routes that
+    // enumerate their own paths (`generateStaticPaths` / `prerender = string[]`) are responsible
+    // for declaring any localized variants themselves, so they're left untouched.
+    const autoLocalize = Boolean(opts.i18n) && flag === true && !pageMod.generateStaticPaths;
+    const paths = autoLocalize ? localizeStaticPaths(basePaths, opts.i18n!) : basePaths;
 
     for (const p of paths) {
       const req = new Request(new URL(p, origin));
@@ -88,6 +100,19 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
   }
 
   return { written, paths: writtenPaths, skipped };
+}
+
+/** Expand each canonical (default-locale) path into one entry per configured locale. */
+function localizeStaticPaths(paths: string[], i18n: I18nConfig): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    out.push(p);
+    for (const locale of i18n.locales) {
+      if (locale === i18n.defaultLocale) continue;
+      out.push(localizeUrl(p, locale, i18n.defaultLocale));
+    }
+  }
+  return out;
 }
 
 async function staticPathsForRoute(

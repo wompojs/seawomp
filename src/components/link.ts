@@ -24,6 +24,7 @@ import { navigate, prefetchRoute } from '../runtime/router.js';
 import {
 	detectClientLocale,
 	getActiveSsrLocale,
+	getActiveSsrPath,
 	getClientI18nConfig,
 	localizeHref,
 	type LocaleContextValue,
@@ -109,6 +110,13 @@ function SeawompLink(props: SeawompLinkProps) {
 	// fall back to `title` so the link still has an accessible name for screen readers.
 	const accessibleLabel = ariaLabel ?? title;
 
+	// The link owns its active state: when the caller doesn't force `ariaCurrent`, we mark
+	// `aria-current="page"` whenever the resolved href points at the current page. Computed in
+	// render on both server (active SSR path) and client (current location) so the hydrated
+	// markup matches the SSR output; `syncActive` then keeps it in sync across SPA navigations.
+	const effectiveAriaCurrent =
+		ariaCurrent !== undefined ? ariaCurrent : resolveAriaCurrent(resolvedHref);
+
 	if (resolvedHref === undefined) {
 		// Legacy form: <seawomp-link><a href=...>...</a></seawomp-link>. The caller already
 		// provided the anchor; we just pass children through so the click/prefetch behavior
@@ -123,7 +131,7 @@ function SeawompLink(props: SeawompLinkProps) {
 			rel=${rel}
 			download=${download}
 			aria-label=${accessibleLabel}
-			aria-current=${ariaCurrent}
+			aria-current=${effectiveAriaCurrent}
 			>${children}</a
 		>
 	`;
@@ -314,6 +322,27 @@ function isLocalNavigableHref(href: string): boolean {
 function linkMatchesCurrentLocation(href: string): boolean {
 	const url = new URL(href, window.location.href);
 	return normalizePath(url.pathname) === normalizePath(window.location.pathname);
+}
+
+/** Render-time `aria-current` for a resolved href: `'page'` when it targets the page currently
+ * being rendered, otherwise `undefined` (no attribute). On the server we compare against the
+ * active SSR path; on the client, the live location. Only local path hrefs (`/…`) qualify. */
+function resolveAriaCurrent(resolvedHref: string | undefined): string | undefined {
+	if (resolvedHref === undefined || !resolvedHref.startsWith('/')) return undefined;
+	if (IS_SERVER) {
+		const activePath = getActiveSsrPath();
+		if (!activePath) return undefined;
+		return normalizePath(pathnameOnly(resolvedHref)) === normalizePath(activePath)
+			? 'page'
+			: undefined;
+	}
+	return linkMatchesCurrentLocation(resolvedHref) ? 'page' : undefined;
+}
+
+/** Strip query/hash so only the path portion is compared. */
+function pathnameOnly(href: string): string {
+	const idx = href.search(/[?#]/);
+	return idx === -1 ? href : href.slice(0, idx);
 }
 
 function normalizePath(pathname: string): string {

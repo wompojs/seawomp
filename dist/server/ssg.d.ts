@@ -1,5 +1,6 @@
 import type { RouteEntry, SpecialRouteEntry } from './routes.js';
 import type { RedirectRule } from '../config.js';
+import { type I18nConfig } from '../i18n/index.js';
 export interface SsgOptions {
     routes: RouteEntry[];
     loadModule: (abs: string) => Promise<any>;
@@ -12,6 +13,9 @@ export interface SsgOptions {
     redirects?: RedirectRule[];
     notFoundRoute?: SpecialRouteEntry;
     errorRoute?: SpecialRouteEntry;
+    /** When set, locale prefixes are stripped before route matching and static
+     * `prerender = true` routes are emitted once per configured locale. */
+    i18n?: I18nConfig;
     transformHtml?: (html: string, pathname: string) => string | Promise<string>;
 }
 export interface SsgResult {

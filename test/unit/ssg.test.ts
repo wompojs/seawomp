@@ -104,6 +104,49 @@ describe('prerender', () => {
     expect(fs.readFileSync(path.join(outDir, 'docs/index.html'), 'utf-8')).toContain('Markdown doc');
   });
 
+  it('emits one file per locale for static prerender=true routes when i18n is set', async () => {
+    write(
+      'page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Home({ data }){ return html\`<h1>\${data.locale}</h1>\`; }
+       defineWompo(Home, { name: 'ssg-i18n-home' });
+       export default Home;
+       export const prerender = true;`,
+    );
+    write(
+      'loader.ts',
+      `export function loader({ url }) {
+         const first = new URL(url).pathname.split('/').filter(Boolean)[0];
+         const locale = first === 'it' ? 'it' : 'en';
+         return { locale };
+       }`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const i18n = { locales: ['en', 'it'], defaultLocale: 'en' };
+    const r = await prerender({ routes, loadModule, outDir, i18n });
+    expect(r.paths.sort()).toEqual(['/', '/it']);
+    expect(fs.readFileSync(path.join(outDir, 'index.html'), 'utf-8')).toContain('en');
+    const it = fs.readFileSync(path.join(outDir, 'it/index.html'), 'utf-8');
+    expect(it).toContain('it');
+    expect(it).toContain('lang="it"');
+  });
+
+  it('does not auto-localize routes that declare their own paths', async () => {
+    write(
+      'blog/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function B({ params }){ return html\`<b>\${params.id}</b>\`; }
+       defineWompo(B, { name: 'ssg-i18n-blog' });
+       export default B;
+       export function generateStaticPaths() { return ['/blog/a', '/it/blog/b']; }`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    routes[0].pattern = '/blog/:id';
+    const i18n = { locales: ['en', 'it'], defaultLocale: 'en' };
+    const r = await prerender({ routes, loadModule, outDir, i18n });
+    expect(r.paths.sort()).toEqual(['/blog/a', '/it/blog/b']);
+  });
+
   it('uses generateStaticPaths for dynamic routes', async () => {
     write(
       'blog/page.ts',

@@ -1,6 +1,6 @@
 {
 	"name": "seawomp",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"description": "Web Component-first meta-framework on top of Wompo SSR (file-based routing, islands, View Transitions). Powered by Bun.",
 	"type": "module",
 	"bin": {

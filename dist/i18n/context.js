@@ -1,15 +1,43 @@
-const ssrLocaleStack = [];
+const SSR_CONTEXT_KEY = '__seawompSsrContext__';
+function ssrStore() {
+    const g = globalThis;
+    let store = g[SSR_CONTEXT_KEY];
+    if (!store) {
+        store = { localeStack: [], pathStack: [] };
+        g[SSR_CONTEXT_KEY] = store;
+    }
+    return store;
+}
 /** Push an active locale onto the SSR stack. Returns a disposer that pops it. */
 export function setActiveSsrLocale(value) {
-    ssrLocaleStack.push(value);
+    const stack = ssrStore().localeStack;
+    stack.push(value);
     return () => {
-        const idx = ssrLocaleStack.lastIndexOf(value);
+        const idx = stack.lastIndexOf(value);
         if (idx >= 0)
-            ssrLocaleStack.splice(idx, 1);
+            stack.splice(idx, 1);
     };
 }
 export function getActiveSsrLocale() {
-    return ssrLocaleStack.length ? ssrLocaleStack[ssrLocaleStack.length - 1] : null;
+    const stack = ssrStore().localeStack;
+    return stack.length ? stack[stack.length - 1] : null;
+}
+/** Push an active request pathname onto the SSR stack. Returns a disposer that pops it. Lets
+ * built-in components (notably <seawomp-link>) auto-resolve `aria-current` server-side by
+ * comparing the resolved href against the page being rendered. */
+export function setActiveSsrPath(pathname) {
+    const stack = ssrStore().pathStack;
+    const entry = { pathname };
+    stack.push(entry);
+    return () => {
+        const idx = stack.lastIndexOf(entry);
+        if (idx >= 0)
+            stack.splice(idx, 1);
+    };
+}
+export function getActiveSsrPath() {
+    const stack = ssrStore().pathStack;
+    return stack.length ? stack[stack.length - 1].pathname : null;
 }
 let clientI18nConfig = null;
 /** Called by the client router bootstrap so components can localize hrefs. */

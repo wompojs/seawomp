@@ -176,6 +176,7 @@ export async function buildAll(cfg, cwd, opts = {}) {
         redirects: cfg.redirects,
         notFoundRoute: ssgSpecialRoutes.notFoundRoute,
         errorRoute: ssgSpecialRoutes.errorRoute,
+        i18n: cfg.i18n,
         transformHtml,
     });
     if (ssg.written.length)

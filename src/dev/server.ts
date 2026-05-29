@@ -20,6 +20,7 @@ import { compileRedirects, matchRedirect } from '../server/redirects.js';
 import { buildHydrateEntry } from './virtual.js';
 import { serveSrc, serveDep, invalidateSrc, invalidateDeps } from './source-server.js';
 import { broadcastReload, registerSocket, unregisterSocket } from './hmr.js';
+import { createDevLoadModule, bumpSsrEpoch } from './ssr-loader.js';
 import { discoverabilityHeadTags } from '../build/discoverability.js';
 
 const HYDRATE_PUBLIC = '/_hydrate.js';
@@ -35,6 +36,10 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 
 	const frameworkHead = discoverabilityHeadTags(cfg.discoverability);
 
+	// SSR module loader: re-bundles route modules per edit so server-rendered HTML tracks source
+	// changes (native `import()` would cache the first version forever — see ssr-loader.ts).
+	const loadModule = createDevLoadModule(cwd);
+
 	// File watcher: rescan on any change under appDir; full reload on any source change.
 	// `fs.watch` with `recursive: true` works on macOS and Linux as of Node 20.
 	if (fs.existsSync(cfg.appDir)) {
@@ -43,6 +48,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 			apiRoutes = scanApiRoutes(cfg.appDir);
 			specialRoutes = scanSpecialRoutes(cfg.appDir);
 			if (filename) invalidateSrc(path.join(cfg.appDir, filename));
+			bumpSsrEpoch();
 			broadcastReload();
 		});
 	}
@@ -51,6 +57,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 	if (fs.existsSync(srcSiblingDir)) {
 		fs.watch(srcSiblingDir, { recursive: true }, (_event, filename) => {
 			if (filename) invalidateSrc(path.join(srcSiblingDir, filename));
+			bumpSsrEpoch();
 			broadcastReload();
 		});
 	}
@@ -69,7 +76,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 		return createHandler({
 			routes,
 			apiRoutes,
-			loadModule: (abs) => import(abs),
+			loadModule,
 			title: cfg.title,
 			frameworkHead,
 			cwd,
@@ -172,6 +179,7 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 				if (!filename) return;
 				const abs = path.resolve(projectRoot, filename.toString());
 				if (ignoredRoots.some((root) => isInside(abs, root))) return;
+				bumpSsrEpoch();
 				broadcastReload();
 			});
 		} catch {
