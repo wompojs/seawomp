@@ -68,6 +68,25 @@ describe('build performance helpers', () => {
 		expect(out).toMatch(/<pre>  keep\s+spaces<\/pre>/);
 	});
 
+	it('preserves all four wompo hydration markers while dropping normal comments', () => {
+		// `<!--wc-->` / `<!--/wc-->` bracket a component's `${children}` region; dropping them
+		// breaks hydration of every component that renders children (e.g. <seawomp-link>), forcing
+		// a destructive client re-render — the per-navigation flicker this guards against.
+		const html =
+			'<body>' +
+			'<!-- drop me -->' +
+			'<seawomp-link data-wompo-ssr><a><!--wc--><wompo-logo></wompo-logo><!--/wc--></a></seawomp-link>' +
+			'<div><!--w-->text<!--/w--></div>' +
+			'</body>';
+
+		const out = postProcessHtml(html, { minify: true });
+		expect(out).toContain('<!--wc-->');
+		expect(out).toContain('<!--/wc-->');
+		expect(out).toContain('<!--w-->');
+		expect(out).toContain('<!--/w-->');
+		expect(out).not.toContain('drop me');
+	});
+
 	it('writes sitemap.xml from prerendered paths and siteUrl', async () => {
 		const out = await writeSitemap(tmpRoot, 'https://example.com/', ['/docs', '/', '/docs']);
 		expect(out).toBe(path.join(tmpRoot, 'sitemap.xml'));
