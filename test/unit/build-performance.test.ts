@@ -68,13 +68,15 @@ describe('build performance helpers', () => {
 		expect(out).toMatch(/<pre>  keep\s+spaces<\/pre>/);
 	});
 
-	it('preserves all four wompo hydration markers while dropping normal comments', () => {
-		// `<!--wc-->` / `<!--/wc-->` bracket a component's `${children}` region; dropping them
-		// breaks hydration of every component that renders children (e.g. <seawomp-link>), forcing
-		// a destructive client re-render — the per-navigation flicker this guards against.
+	it('preserves ALL comments verbatim (hydration counts comment nodes)', () => {
+		// `<!--wc-->` / `<!--/wc-->` bracket a component's `${children}` region and `<!--w-->` /
+		// `<!--/w-->` a node interpolation; dropping them breaks hydration outright. But wompo's
+		// adopt() walker counts EVERY element/comment node, so stripping even an authored
+		// `<!-- note -->` that also exists in the component template shifts the node indices and
+		// forces the destructive client re-render. All comments must survive minification.
 		const html =
 			'<body>' +
-			'<!-- drop me -->' +
+			'<!-- authored note -->' +
 			'<seawomp-link data-wompo-ssr><a><!--wc--><wompo-logo></wompo-logo><!--/wc--></a></seawomp-link>' +
 			'<div><!--w-->text<!--/w--></div>' +
 			'</body>';
@@ -84,7 +86,21 @@ describe('build performance helpers', () => {
 		expect(out).toContain('<!--/wc-->');
 		expect(out).toContain('<!--w-->');
 		expect(out).toContain('<!--/w-->');
-		expect(out).not.toContain('drop me');
+		expect(out).toContain('<!-- authored note -->');
+	});
+
+	it('protects <template data-wompo-props> JSON payloads from whitespace collapse', () => {
+		// The island props payload is JSON: a `>\s+<` collapse inside a string value would
+		// silently corrupt the hydrated props.
+		const json = '[0,[["Object",{"snippet":"a > b  < c"}]]]';
+		const html =
+			'<body><my-island data-wompo-island="0"><template data-wompo-props type="application/json">' +
+			json +
+			'</template>\n\t<div>x</div></my-island></body>';
+
+		const out = postProcessHtml(html, { minify: true });
+		expect(out).toContain(json);
+		expect(out).toContain('</template><div>x</div>');
 	});
 
 	it('writes sitemap.xml from prerendered paths and siteUrl', async () => {
