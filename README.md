@@ -318,12 +318,12 @@ Prefer the component form when the image should be visible to crawlers and the f
 
 ### Build-time optimization (WebP / AVIF / srcset)
 
-When `sharp` is installed as a peer dep, `seawomp build` walks `public/` and emits resized
-variants for every raster image (`.jpg`, `.jpeg`, `.png`, `.webp`):
-
-```sh
-bun add sharp
-```
+`seawomp build` walks `public/` and emits resized variants for every raster image (`.jpg`,
+`.jpeg`, `.png`, `.webp`). The `sharp` encoder installs automatically with seawomp (it's an
+optional dependency); if it's unavailable — unsupported platform, or installs run with
+optional deps omitted — the build skips image compression with a warning and serves the
+originals as-is. Add `sharp` to your own dependencies to pin its version, or set
+`images.disabled: true` to opt out entirely.
 
 ```ts
 // seawomp.config.ts

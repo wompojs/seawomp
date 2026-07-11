@@ -140,7 +140,7 @@ bun run build:vercel # production build for Vercel
 
 - \`app/\` — file-based routes. \`page.ts\` for pages, \`layout.ts\` for layouts,
   \`loader.ts\` for async data, \`api/**/route.ts\` for API endpoints.
-- \`public/\` — static assets (auto-optimized at build when \`sharp\` is installed).
+- \`public/\` — static assets (raster images are auto-optimized at build; \`sharp\` ships with seawomp).
 - \`src/server.ts\` — Vercel/Hono adapter entrypoint.
 - \`seawomp.config.ts\` — framework config (title, image variants, minify flags).
 
@@ -166,7 +166,7 @@ function seawompConfig(name) {
 export default defineConfig({
   title: '${name}',
   port: 5173,
-  // Uncomment + \`bun add sharp\` to enable WebP/AVIF generation:
+  // WebP/AVIF generation runs automatically (sharp ships with seawomp). Customize with:
   // images: { sizes: [640, 960, 1280, 1920], formats: ['avif', 'webp'] },
 });
 `;

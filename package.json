@@ -46,23 +46,19 @@
 		"test:e2e": "playwright test"
 	},
 	"peerDependencies": {
-		"sharp": ">=0.33.0",
 		"wompo": ">=2.0.1"
-	},
-	"peerDependenciesMeta": {
-		"sharp": {
-			"optional": true
-		}
 	},
 	"dependencies": {
 		"hono": "^4.12.22",
 		"lightningcss": "^1.27.0"
 	},
+	"optionalDependencies": {
+		"sharp": "^0.34.0"
+	},
 	"devDependencies": {
 		"@playwright/test": "^1.49.0",
 		"@types/bun": "^1.1.0",
 		"@types/node": "^22.0.0",
-		"sharp": "^0.34.0",
 		"typescript": "^5.6.0",
 		"wompo": "^2.0.3"
 	}
