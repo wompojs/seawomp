@@ -11,6 +11,7 @@ export {
 	setRoutes,
 	setRouterOptions,
 	clearPrefetchCache,
+	canonicalPathname,
 	useRoute,
 	useNavigationState,
 	getNavigationSnapshot,

@@ -17,6 +17,7 @@ import {
 } from '../server/routes.js';
 import { scanApiRoutes, type ApiRouteEntry } from '../server/api-router.js';
 import { compressResponseBody, serveStatic } from '../server/static.js';
+import { setSsrImageManifest } from '../shared/image-manifest.js';
 import type { BuildManifest } from '../server/manifest.js';
 import { compileRedirects, matchRedirect } from '../server/redirects.js';
 import { postProcessHtml } from './html-postprocess.js';
@@ -50,6 +51,8 @@ export async function createProdHandler(
 	let frameworkHead = manifest.head?.framework ?? discoverabilityHeadTags(cfg.discoverability);
 	if (manifest.images && Object.keys(manifest.images).length) {
 		frameworkHead += `<script>window.__SEAWOMP_IMAGES=${JSON.stringify(manifest.images)};</script>`;
+		// Server-side counterpart: <seawomp-image> emits srcset directly in the SSR HTML.
+		setSsrImageManifest(manifest.images);
 	}
 
 	const dispatch = createHandler({

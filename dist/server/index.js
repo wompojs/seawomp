@@ -5,3 +5,4 @@ export { scanRoutes } from './routes.js';
 export { scanSpecialRoutes } from './routes.js';
 export { scanApiRoutes, compileApiRoutes, dispatchApi } from './api-router.js';
 export { notFound, redirect } from './http.js';
+export { getSsrImageManifest, setSsrImageManifest } from '../shared/image-manifest.js';

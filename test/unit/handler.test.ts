@@ -92,6 +92,64 @@ describe('createHandler', () => {
     expect(res.headers.get('location')).toBe('http://x/en');
   });
 
+  it('serves translated route paths (i18n.routes) and redirects the untranslated variant', async () => {
+    write(
+      'projects/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Projects(){ return html\`<h1>projects page</h1>\`; }
+       defineWompo(Projects, { name: 'tu-i18n-projects' });
+       export default Projects;`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const h = createHandler({
+      routes,
+      loadModule,
+      i18n: {
+        locales: ['en', 'it'],
+        defaultLocale: 'en',
+        routes: { '/projects': { it: '/progetti' } },
+      },
+    });
+
+    // Translated URL renders the canonical route with the right lang.
+    const translated = await h(new Request('http://x/it/progetti'));
+    expect(translated.status).toBe(200);
+    const body = await readBody(translated);
+    expect(body).toContain('projects page');
+    expect(body).toContain('lang="it"');
+
+    // The untranslated localized URL is permanently redirected to the translated one.
+    const untranslated = await h(new Request('http://x/it/projects?tab=1'));
+    expect(untranslated.status).toBe(308);
+    expect(untranslated.headers.get('location')).toBe('/it/progetti?tab=1');
+
+    // Default-locale URL is untouched; the bare translated slug is not a route.
+    const canonical = await h(new Request('http://x/projects'));
+    expect(canonical.status).toBe(200);
+    const bare = await h(new Request('http://x/progetti'));
+    expect(bare.status).toBe(404);
+  });
+
+  it('localizes browser-locale redirects through the i18n.routes map', async () => {
+    const h = createHandler({
+      routes: [],
+      loadModule,
+      i18n: {
+        locales: ['en', 'it'],
+        defaultLocale: 'en',
+        detectBrowserLocale: true,
+        routes: { '/projects': { it: '/progetti' } },
+      },
+    });
+    const res = await h(
+      new Request('http://x/projects', {
+        headers: { accept: 'text/html', 'accept-language': 'it-IT,it;q=0.9' },
+      }),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toBe('http://x/it/progetti');
+  });
+
   it('passes URL params to the page via PageProps.params (synthetic route)', async () => {
     const pageAbs = write(
       'blog_id_page.ts',

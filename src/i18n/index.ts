@@ -41,8 +41,11 @@ export {
 	localizeHref,
 	setActiveSsrLocale,
 	setClientI18nConfig,
+	translateRoutePath,
+	untranslateRoutePath,
 } from './context.js';
-export type { LocaleContextValue } from './context.js';
+export type { I18nRouteMap, LocaleContextValue } from './context.js';
+import { translateRoutePath, untranslateRoutePath, type I18nRouteMap } from './context.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +58,15 @@ export interface I18nConfig {
 	defaultLocale: string;
 	/** Redirect unprefixed page requests to the user's browser locale when supported. */
 	detectBrowserLocale?: boolean;
+	/** Translated route pathnames, keyed by canonical (default-locale) path:
+	 *
+	 *   routes: { '/projects': { it: '/progetti' } }
+	 *
+	 * serves the `/projects` page at `/it/progetti`, prerenders/localizes links to that URL,
+	 * and permanently redirects the untranslated `/it/projects` there. Nested paths inherit
+	 * the parent mapping (`/projects/alpha` → `/it/progetti/alpha`), which also covers
+	 * dynamic segments. Locales without an entry fall back to the canonical path. */
+	routes?: I18nRouteMap;
 }
 
 /** Dictionary returned by `loadMessages` / stored in loader data. */
@@ -130,6 +142,34 @@ export function localizeUrl(
 	return '/' + locale + norm;
 }
 
+/**
+ * Full localized URL for a canonical (default-locale) pathname: applies the `config.routes`
+ * translation map, then the locale prefix.
+ *
+ * @example
+ *   localizePathname('/projects', 'it', { locales: ['en','it'], defaultLocale: 'en',
+ *     routes: { '/projects': { it: '/progetti' } } })
+ *   // → '/it/progetti'
+ */
+export function localizePathname(
+	pathname: string,
+	locale: string,
+	config: I18nConfig,
+): string {
+	const translated = translateRoutePath(pathname, locale, config.defaultLocale, config.routes);
+	return localizeUrl(translated, locale, config.defaultLocale);
+}
+
+/**
+ * Inverse of `localizePathname`: strip the locale prefix and untranslate the pathname back to
+ * the canonical (default-locale) form used for route matching.
+ */
+export function delocalizePathname(pathname: string, config: I18nConfig): string {
+	const locale = getLocale(new URL(pathname, 'https://seawomp.local'), config);
+	const stripped = stripLocalePrefix(pathname, locale, config.defaultLocale);
+	return untranslateRoutePath(stripped, locale, config.defaultLocale, config.routes);
+}
+
 /** Pick the best supported locale from an Accept-Language header. */
 export function preferredLocaleFromAcceptLanguage(
 	acceptLanguage: string | null,
@@ -168,6 +208,8 @@ export function preferredLocaleFromAcceptLanguage(
  * Build a map of `{ locale → localizedUrl }` for all configured locales.
  * Useful for rendering hreflang links in the `<head>`.
  *
+ * Translated routes from `config.routes` are applied per locale.
+ *
  * @example
  *   alternateUrls('/about', { locales: ['en', 'it'], defaultLocale: 'en' })
  *   // → { en: '/about', it: '/it/about' }
@@ -178,7 +220,7 @@ export function alternateUrls(
 ): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const locale of config.locales) {
-		out[locale] = localizeUrl(pathname, locale, config.defaultLocale);
+		out[locale] = localizePathname(pathname, locale, config);
 	}
 	return out;
 }
@@ -207,7 +249,7 @@ export function seoI18nHead(options: SeoI18nHeadOptions): RenderHtml {
 	const alternate = alternateUrls(basePath, options.i18n);
 	const canonicalUrl = absoluteUrl(options.siteUrl, canonicalPath);
 	const xDefaultLocale = options.xDefaultLocale ?? options.i18n.defaultLocale;
-	const xDefaultPath = alternate[xDefaultLocale] ?? localizeUrl(basePath, xDefaultLocale, options.i18n.defaultLocale);
+	const xDefaultPath = alternate[xDefaultLocale] ?? localizePathname(basePath, xDefaultLocale, options.i18n);
 	return html`
 		<link rel="canonical" href="${canonicalUrl}">
 		${options.i18n.locales.map(
@@ -242,7 +284,8 @@ export function seoI18nHead(options: SeoI18nHeadOptions): RenderHtml {
 function unlocalizedPath(pathname: string, locale: string, config: I18nConfig): string {
 	const normalized = normalizePath(pathname);
 	if (locale === config.defaultLocale) return normalized;
-	return stripLocalePrefix(normalized, locale, config.defaultLocale);
+	const stripped = stripLocalePrefix(normalized, locale, config.defaultLocale);
+	return untranslateRoutePath(stripped, locale, config.defaultLocale, config.routes);
 }
 
 function absoluteUrl(siteUrl: string, pathname: string): string {

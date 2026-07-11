@@ -11,7 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHandler } from './handler.js';
-import { localizeUrl } from '../i18n/index.js';
+import { localizePathname } from '../i18n/index.js';
 export async function prerender(opts) {
     const origin = opts.origin ?? 'http://localhost';
     const handler = createHandler({
@@ -28,6 +28,7 @@ export async function prerender(opts) {
     });
     const written = [];
     const writtenPaths = [];
+    const sitemapPaths = [];
     const skipped = [];
     for (const route of opts.routes) {
         const pageMod = (await opts.loadModule(route.pagePath));
@@ -51,6 +52,7 @@ export async function prerender(opts) {
         // for declaring any localized variants themselves, so they're left untouched.
         const autoLocalize = Boolean(opts.i18n) && flag === true && !pageMod.generateStaticPaths;
         const paths = autoLocalize ? localizeStaticPaths(basePaths, opts.i18n) : basePaths;
+        const routeInSitemap = pageMod.sitemap !== false;
         for (const p of paths) {
             const req = new Request(new URL(p, origin));
             const res = await handler(req);
@@ -66,11 +68,35 @@ export async function prerender(opts) {
             await fs.writeFile(fileAbs, html, 'utf-8');
             written.push(fileAbs);
             writtenPaths.push(p);
+            if (routeInSitemap && !hasNoindexMeta(html))
+                sitemapPaths.push(p);
         }
     }
-    return { written, paths: writtenPaths, skipped };
+    return { written, paths: writtenPaths, sitemapPaths, skipped };
 }
-/** Expand each canonical (default-locale) path into one entry per configured locale. */
+/** Whether the rendered document opts out of indexing via `<meta name="robots">` whose
+ * content includes the `noindex` (or `none`) directive. Such pages must not be listed in
+ * the sitemap — a noindex URL in sitemap.xml is a contradictory signal for crawlers. */
+export function hasNoindexMeta(html) {
+    for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+        const name = metaAttr(tag, 'name');
+        if (!name || name.toLowerCase() !== 'robots')
+            continue;
+        const content = metaAttr(tag, 'content') ?? '';
+        if (/(^|[\s,])(noindex|none)([\s,]|$)/i.test(content))
+            return true;
+    }
+    return false;
+}
+function metaAttr(tag, name) {
+    const quoted = new RegExp(`\\s${name}\\s*=\\s*(['"])(.*?)\\1`, 'i').exec(tag);
+    if (quoted)
+        return quoted[2];
+    const bare = new RegExp(`\\s${name}\\s*=\\s*([^\\s>]+)`, 'i').exec(tag);
+    return bare ? bare[1] : null;
+}
+/** Expand each canonical (default-locale) path into one entry per configured locale,
+ * applying the `i18n.routes` translation map (`/projects` → `/it/progetti`). */
 function localizeStaticPaths(paths, i18n) {
     const out = [];
     for (const p of paths) {
@@ -78,7 +104,7 @@ function localizeStaticPaths(paths, i18n) {
         for (const locale of i18n.locales) {
             if (locale === i18n.defaultLocale)
                 continue;
-            out.push(localizeUrl(p, locale, i18n.defaultLocale));
+            out.push(localizePathname(p, locale, i18n));
         }
     }
     return out;

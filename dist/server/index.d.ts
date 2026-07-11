@@ -8,3 +8,5 @@ export { scanApiRoutes, compileApiRoutes, dispatchApi } from './api-router.js';
 export type { ApiRouteEntry } from './api-router.js';
 export { notFound, redirect } from './http.js';
 export type { RedirectStatus } from './http.js';
+export { getSsrImageManifest, setSsrImageManifest } from '../shared/image-manifest.js';
+export type { SsrImageManifest, SsrImageVariant } from '../shared/image-manifest.js';

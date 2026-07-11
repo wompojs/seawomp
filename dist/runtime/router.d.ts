@@ -1,3 +1,4 @@
+import { type I18nRouteMap } from '../i18n/context.js';
 export interface RouteRecord {
     pattern: string;
     page: string;
@@ -7,6 +8,8 @@ export interface RouterI18nConfig {
     locales: string[];
     defaultLocale: string;
     detectBrowserLocale?: boolean;
+    /** Translated route pathnames keyed by canonical path (see `I18nConfig.routes`). */
+    routes?: I18nRouteMap;
 }
 export interface RouterViewTransitionOptions {
     /** Enable browser View Transitions for SPA navigations. Default: true. */
@@ -54,3 +57,8 @@ export declare function getNavigationSnapshot(): NavigationSnapshot;
  * the navigation state changes. Use it inside an island to render a skeleton/spinner while a
  * route transition is in flight. */
 export declare function useNavigationState(): NavigationSnapshot;
+/** Canonical (default-locale) pathname for a localized URL: locale prefix stripped and
+ * translated slugs (i18n.routes) mapped back. This is the pathname the route table matches
+ * against — used by the hydrate-entry bootstrap to pick the initial page module. Requires
+ * `setRouterOptions({ i18n })` to have been called; without i18n it returns the input. */
+export declare function canonicalPathname(pathname: string): string;

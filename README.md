@@ -183,6 +183,23 @@ export function generateStaticPaths() {
 ```
 
 When `siteUrl` is configured, the build also writes `sitemap.xml` from the prerendered paths.
+Two ways to keep a page out of `sitemap.xml` (and `sitemap.txt` / `llms.txt`) while still
+prerendering it:
+
+```ts
+// app/admin/page.ts — explicit opt-out
+export const prerender = true;
+export const sitemap = false;
+```
+
+```ts
+// or via robots meta: pages whose rendered <head> carries noindex are excluded automatically
+export function head() {
+	return html`<meta name="robots" content="noindex, nofollow">`;
+}
+```
+
+Pages that are not prerendered (SSR-only) never appear in the sitemap.
 
 ### Redirects and error responses
 
@@ -262,8 +279,21 @@ the file's exports. API routes are matched **before** pages so they never get sh
 
 ## `<seawomp-image>` — optimized images
 
-A first-class image custom element. SSR emits the tag as-is; on connect it builds a wrapper +
-placeholder + `<img>` with `loading="lazy"` / `decoding="async"` by default.
+A first-class image component. Used as a Wompo component inside a page template, it is fully
+server-rendered — wrapper + placeholder + `<img>` with `loading="lazy"` / `decoding="async"`
+defaults and, in production, the complete `srcset` already in the HTML:
+
+```ts
+import { Image } from 'seawomp/components';
+
+function Hero() {
+	return html`<${Image} src="/images/hero.jpg" alt="Studio Mono hero" ratio="16/9" priority />`;
+}
+```
+
+It can also be written as a bare custom-element tag; in that form SSR emits the tag as-is and
+the element builds its DOM on connect (reading `window.__SEAWOMP_IMAGES` for the srcset).
+Prefer the component form when the image should be visible to crawlers and the first paint:
 
 ```html
 <seawomp-image src="/images/hero.jpg" alt="Studio Mono hero" ratio="16/9" priority> </seawomp-image>
@@ -279,6 +309,12 @@ placeholder + `<img>` with `loading="lazy"` / `decoding="async"` by default.
 | `ratio`          | CSS aspect-ratio fallback (e.g. `"4/3"`)                           |
 | `priority`       | boolean — `fetchpriority=high` + `loading=eager` + `decoding=sync` |
 | `placeholder`    | `"blur"` (default) or `"none"`                                     |
+| `loading`        | `"eager"` / `"lazy"` — overrides the `priority` default            |
+| `decoding`       | `"sync"` / `"async"` / `"auto"` — overrides the `priority` default |
+| `fetchpriority`  | `"high"` / `"low"` / `"auto"` — overrides the `priority` default   |
+| `crossorigin`    | passes through to `<img crossorigin>`                              |
+| `referrerpolicy` | passes through to `<img referrerpolicy>`                           |
+| `usemap`/`ismap` | pass through to the inner `<img>`                                  |
 
 ### Build-time optimization (WebP / AVIF / srcset)
 
@@ -301,9 +337,11 @@ export default defineConfig({
 ```
 
 Variants land in `.seawomp/static/_assets/img/`. The build also writes the image map into the
-production manifest, and the prod server injects it into `<head>` as `window.__SEAWOMP_IMAGES`; `<seawomp-image>` reads
-it and populates `srcset` on connect — no markup change required. SVGs are passed through
-unchanged.
+production manifest and registers it with the SSR pipeline, so prerendered/server-rendered HTML
+already carries the full `srcset` (crawlers, first paint and the LCP preload all use the
+optimized variants). The prod server additionally injects the map into `<head>` as
+`window.__SEAWOMP_IMAGES` for client-side renders — no markup change required. SVGs are passed
+through unchanged.
 
 ### CSS (responsibility of the app)
 
@@ -335,6 +373,39 @@ The framework ships no CSS. Add this once to your global stylesheet:
 	opacity: 0;
 }
 ```
+
+## i18n — locale routing and translated paths
+
+Set `i18n` in the config to enable locale URL routing: the default locale is unprefixed
+(`/about`), every other locale lives under its prefix (`/it/about`). The prefix is stripped
+before route matching, so one `app/about/page.ts` serves every locale; static
+`prerender = true` routes are emitted once per locale.
+
+```ts
+export default defineConfig({
+	i18n: {
+		locales: ['en', 'it'],
+		defaultLocale: 'en',
+		detectBrowserLocale: true, // optional: 307 from `/` to the browser's locale
+		// Optional translated pathnames, keyed by canonical (default-locale) path:
+		routes: {
+			'/projects': { it: '/progetti' },
+			'/about': { it: '/chi-siamo' },
+		},
+	},
+});
+```
+
+With `routes` configured, `/it/progetti` serves the `/projects` page, `<seawomp-link
+href="/projects">` resolves to `/it/progetti` under the Italian locale, prerendering emits
+`it/progetti/index.html`, and the untranslated `/it/projects` gets a permanent 308 redirect to
+the translated URL. Nested paths inherit the parent mapping (`/projects/alpha` →
+`/it/progetti/alpha`), which covers dynamic segments too. Locales without an entry fall back
+to the canonical path.
+
+Loaders receive the original URL (prefix included) via `LoaderArgs.url`; messages and the
+`t()` translator live in `seawomp/i18n` (`getLocale`, `loadMessages`, `createTranslator`,
+`seoI18nHead` for canonical/hreflang tags).
 
 ## `<seawomp-link>` — client navigation with prefetch
 
@@ -483,6 +554,12 @@ export default defineConfig({
 	redirects: [
 		{ source: '/old/:slug*', destination: '/new/:slug*', status: 301 },
 	],
+	i18n: {
+		locales: ['en', 'it'],
+		defaultLocale: 'en',
+		detectBrowserLocale: false,
+		routes: { '/projects': { it: '/progetti' } }, // translated pathnames (optional)
+	},
 	images: {
 		sizes: [640, 960, 1280, 1920],
 		formats: ['avif', 'webp'],
@@ -511,7 +588,6 @@ export default defineConfig({
 
 ## What's not (yet) in the MVP
 
-- i18n
 - Incremental Static Regeneration
 - Module-level HMR (full-reload only today)
 - Built-in browser e2e suite (Playwright spec is sketched but not wired)

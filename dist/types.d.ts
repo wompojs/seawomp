@@ -32,6 +32,10 @@ export interface PageModule {
     prerender?: boolean | string[];
     generateStaticPaths?: () => StaticPath[] | Promise<StaticPath[]>;
     head?: (props: PageProps) => RenderHtml | null | undefined;
+    /** Set to `false` to keep this route's prerendered paths out of sitemap.xml,
+     * sitemap.txt and llms.txt. Pages whose rendered `<head>` carries
+     * `<meta name="robots" content="noindex">` are excluded automatically. */
+    sitemap?: boolean;
 }
 export type StaticPath = string | {
     path?: string;

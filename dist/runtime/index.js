@@ -5,7 +5,7 @@
  * import statement. */
 import '../components/index.js'; // side-effect: registers built-in Wompo components
 export { hydrate } from 'wompo/hydrate';
-export { navigate, prefetchRoute, setRoutes, setRouterOptions, clearPrefetchCache, useRoute, useNavigationState, getNavigationSnapshot, } from './router.js';
+export { navigate, prefetchRoute, setRoutes, setRouterOptions, clearPrefetchCache, canonicalPathname, useRoute, useNavigationState, getNavigationSnapshot, } from './router.js';
 export { applyHead } from './head.js';
 export { callAction, ActionError } from './actions.js';
 export { setClientI18nConfig } from '../i18n/context.js';

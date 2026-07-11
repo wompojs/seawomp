@@ -1,6 +1,6 @@
 import '../components/index.js';
 export { hydrate } from 'wompo/hydrate';
-export { navigate, prefetchRoute, setRoutes, setRouterOptions, clearPrefetchCache, useRoute, useNavigationState, getNavigationSnapshot, } from './router.js';
+export { navigate, prefetchRoute, setRoutes, setRouterOptions, clearPrefetchCache, canonicalPathname, useRoute, useNavigationState, getNavigationSnapshot, } from './router.js';
 export type { RouteRecord, RouteSnapshot, RouterOptions, RouterI18nConfig, RouterViewTransitionOptions, NavigationState, NavigationSnapshot, } from './router.js';
 export { applyHead } from './head.js';
 export { callAction, ActionError } from './actions.js';

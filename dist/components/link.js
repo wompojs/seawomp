@@ -21,7 +21,7 @@
  */
 import { defineWompo, html, useEffect, useSelf } from 'wompo';
 import { navigate, prefetchRoute } from '../runtime/router.js';
-import { detectClientLocale, getActiveSsrLocale, getActiveSsrPath, getClientI18nConfig, localizeHref, } from '../i18n/context.js';
+import { detectClientLocale, getActiveSsrLocale, getActiveSsrPath, getClientI18nConfig, localizeHref, untranslateRoutePath, } from '../i18n/context.js';
 const IS_SERVER = typeof window === 'undefined';
 const DEFAULT_DELAY = 50;
 let observer = null;
@@ -193,7 +193,7 @@ function resolveHref(href, localeOverride) {
     if (!ctx)
         return href;
     const locale = localeOverride ?? ctx.locale;
-    return localizeHref(href, locale, ctx.defaultLocale, ctx.locales);
+    return localizeHref(href, locale, ctx.defaultLocale, ctx.locales, ctx.routes);
 }
 function activeLocaleContext() {
     if (IS_SERVER)
@@ -205,11 +205,13 @@ function activeLocaleContext() {
         locale: detectClientLocale(),
         defaultLocale: config.defaultLocale,
         locales: config.locales,
+        routes: config.routes,
     };
 }
-/** Strip a leading locale prefix from `pathname` using the active SSR/client locale config.
- * Mirrors `localizeHref`'s parsing so the round-trip
- * `localizeHref(stripLocaleFromPathname(p), locale, default, locales)` is well-defined. */
+/** Strip a leading locale prefix from `pathname` (untranslating i18n.routes slugs back to
+ * canonical) using the active SSR/client locale config. Mirrors `localizeHref`'s parsing so
+ * the round-trip `localizeHref(stripLocaleFromPathname(p), locale, default, locales, routes)`
+ * is well-defined. */
 function stripLocaleFromPathname(pathname) {
     const ctx = activeLocaleContext();
     if (!ctx)
@@ -218,11 +220,12 @@ function stripLocaleFromPathname(pathname) {
     if (!first || !ctx.locales.includes(first))
         return pathname;
     const prefix = '/' + first;
+    let stripped = pathname;
     if (pathname === prefix)
-        return '/';
-    if (pathname.startsWith(prefix + '/'))
-        return pathname.slice(prefix.length);
-    return pathname;
+        stripped = '/';
+    else if (pathname.startsWith(prefix + '/'))
+        stripped = pathname.slice(prefix.length);
+    return untranslateRoutePath(stripped, first, ctx.defaultLocale, ctx.routes);
 }
 /** Effective pathname for a `follow="path"` link — `window.location.pathname` on the client,
  * undefined on the server (SSR can't know it generically; the caller falls back to `href`). */

@@ -1,6 +1,7 @@
 import { type RenderHtml } from 'wompo';
-export { detectClientLocale, getActiveSsrLocale, getClientI18nConfig, localizeHref, setActiveSsrLocale, setClientI18nConfig, } from './context.js';
-export type { LocaleContextValue } from './context.js';
+export { detectClientLocale, getActiveSsrLocale, getClientI18nConfig, localizeHref, setActiveSsrLocale, setClientI18nConfig, translateRoutePath, untranslateRoutePath, } from './context.js';
+export type { I18nRouteMap, LocaleContextValue } from './context.js';
+import { type I18nRouteMap } from './context.js';
 export interface I18nConfig {
     /** All supported locale codes, e.g. `['en', 'it', 'fr']`. */
     locales: string[];
@@ -8,6 +9,15 @@ export interface I18nConfig {
     defaultLocale: string;
     /** Redirect unprefixed page requests to the user's browser locale when supported. */
     detectBrowserLocale?: boolean;
+    /** Translated route pathnames, keyed by canonical (default-locale) path:
+     *
+     *   routes: { '/projects': { it: '/progetti' } }
+     *
+     * serves the `/projects` page at `/it/progetti`, prerenders/localizes links to that URL,
+     * and permanently redirects the untranslated `/it/projects` there. Nested paths inherit
+     * the parent mapping (`/projects/alpha` → `/it/progetti/alpha`), which also covers
+     * dynamic segments. Locales without an entry fall back to the canonical path. */
+    routes?: I18nRouteMap;
 }
 /** Dictionary returned by `loadMessages` / stored in loader data. */
 export type Messages = Record<string, string>;
@@ -48,11 +58,28 @@ export declare function stripLocalePrefix(pathname: string, locale: string, defa
  *   localizeUrl('/', 'it', 'en')       // → '/it'
  */
 export declare function localizeUrl(pathname: string, locale: string, defaultLocale: string): string;
+/**
+ * Full localized URL for a canonical (default-locale) pathname: applies the `config.routes`
+ * translation map, then the locale prefix.
+ *
+ * @example
+ *   localizePathname('/projects', 'it', { locales: ['en','it'], defaultLocale: 'en',
+ *     routes: { '/projects': { it: '/progetti' } } })
+ *   // → '/it/progetti'
+ */
+export declare function localizePathname(pathname: string, locale: string, config: I18nConfig): string;
+/**
+ * Inverse of `localizePathname`: strip the locale prefix and untranslate the pathname back to
+ * the canonical (default-locale) form used for route matching.
+ */
+export declare function delocalizePathname(pathname: string, config: I18nConfig): string;
 /** Pick the best supported locale from an Accept-Language header. */
 export declare function preferredLocaleFromAcceptLanguage(acceptLanguage: string | null, config: I18nConfig): string;
 /**
  * Build a map of `{ locale → localizedUrl }` for all configured locales.
  * Useful for rendering hreflang links in the `<head>`.
+ *
+ * Translated routes from `config.routes` are applied per locale.
  *
  * @example
  *   alternateUrls('/about', { locales: ['en', 'it'], defaultLocale: 'en' })

@@ -33,7 +33,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { html } from 'wompo';
-export { detectClientLocale, getActiveSsrLocale, getClientI18nConfig, localizeHref, setActiveSsrLocale, setClientI18nConfig, } from './context.js';
+export { detectClientLocale, getActiveSsrLocale, getClientI18nConfig, localizeHref, setActiveSsrLocale, setClientI18nConfig, translateRoutePath, untranslateRoutePath, } from './context.js';
+import { translateRoutePath, untranslateRoutePath } from './context.js';
 // ---------------------------------------------------------------------------
 // URL helpers
 // ---------------------------------------------------------------------------
@@ -92,6 +93,28 @@ export function localizeUrl(pathname, locale, defaultLocale) {
     const norm = pathname === '/' ? '' : pathname;
     return '/' + locale + norm;
 }
+/**
+ * Full localized URL for a canonical (default-locale) pathname: applies the `config.routes`
+ * translation map, then the locale prefix.
+ *
+ * @example
+ *   localizePathname('/projects', 'it', { locales: ['en','it'], defaultLocale: 'en',
+ *     routes: { '/projects': { it: '/progetti' } } })
+ *   // → '/it/progetti'
+ */
+export function localizePathname(pathname, locale, config) {
+    const translated = translateRoutePath(pathname, locale, config.defaultLocale, config.routes);
+    return localizeUrl(translated, locale, config.defaultLocale);
+}
+/**
+ * Inverse of `localizePathname`: strip the locale prefix and untranslate the pathname back to
+ * the canonical (default-locale) form used for route matching.
+ */
+export function delocalizePathname(pathname, config) {
+    const locale = getLocale(new URL(pathname, 'https://seawomp.local'), config);
+    const stripped = stripLocalePrefix(pathname, locale, config.defaultLocale);
+    return untranslateRoutePath(stripped, locale, config.defaultLocale, config.routes);
+}
 /** Pick the best supported locale from an Accept-Language header. */
 export function preferredLocaleFromAcceptLanguage(acceptLanguage, config) {
     if (!acceptLanguage)
@@ -126,6 +149,8 @@ export function preferredLocaleFromAcceptLanguage(acceptLanguage, config) {
  * Build a map of `{ locale → localizedUrl }` for all configured locales.
  * Useful for rendering hreflang links in the `<head>`.
  *
+ * Translated routes from `config.routes` are applied per locale.
+ *
  * @example
  *   alternateUrls('/about', { locales: ['en', 'it'], defaultLocale: 'en' })
  *   // → { en: '/about', it: '/it/about' }
@@ -133,7 +158,7 @@ export function preferredLocaleFromAcceptLanguage(acceptLanguage, config) {
 export function alternateUrls(pathname, config) {
     const out = {};
     for (const locale of config.locales) {
-        out[locale] = localizeUrl(pathname, locale, config.defaultLocale);
+        out[locale] = localizePathname(pathname, locale, config);
     }
     return out;
 }
@@ -146,7 +171,7 @@ export function seoI18nHead(options) {
     const alternate = alternateUrls(basePath, options.i18n);
     const canonicalUrl = absoluteUrl(options.siteUrl, canonicalPath);
     const xDefaultLocale = options.xDefaultLocale ?? options.i18n.defaultLocale;
-    const xDefaultPath = alternate[xDefaultLocale] ?? localizeUrl(basePath, xDefaultLocale, options.i18n.defaultLocale);
+    const xDefaultPath = alternate[xDefaultLocale] ?? localizePathname(basePath, xDefaultLocale, options.i18n);
     return html `
 		<link rel="canonical" href="${canonicalUrl}">
 		${options.i18n.locales.map((entry) => html `
@@ -177,7 +202,8 @@ function unlocalizedPath(pathname, locale, config) {
     const normalized = normalizePath(pathname);
     if (locale === config.defaultLocale)
         return normalized;
-    return stripLocalePrefix(normalized, locale, config.defaultLocale);
+    const stripped = stripLocalePrefix(normalized, locale, config.defaultLocale);
+    return untranslateRoutePath(stripped, locale, config.defaultLocale, config.routes);
 }
 function absoluteUrl(siteUrl, pathname) {
     if (/^https?:\/\//i.test(pathname))

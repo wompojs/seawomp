@@ -66,21 +66,95 @@ export function detectClientLocale() {
     return document.documentElement.lang || 'en';
 }
 /** Pure URL helper — prefix `href` with `/locale` when `locale !== defaultLocale`,
- * stripping any existing locale prefix first. Returns external URLs unchanged. */
-export function localizeHref(href, locale, defaultLocale, locales) {
+ * stripping any existing locale prefix first. When a `routes` translation map is provided,
+ * the pathname is also translated (`/projects` → `/progetti` for `locale: 'it'`), and an
+ * already-localized href is untranslated back to canonical before re-localizing. Returns
+ * external URLs unchanged. */
+export function localizeHref(href, locale, defaultLocale, locales, routes) {
     if (!href)
         return href;
     if (/^([a-z][a-z0-9+.-]*:|\/\/|#|mailto:|tel:)/i.test(href))
         return href;
     if (!href.startsWith('/'))
         return href;
-    const first = href.split('/').filter(Boolean)[0];
-    let stripped = href;
+    // Query/hash must not take part in path translation or prefixing.
+    const suffixIdx = href.search(/[?#]/);
+    const path = suffixIdx === -1 ? href : href.slice(0, suffixIdx);
+    const suffix = suffixIdx === -1 ? '' : href.slice(suffixIdx);
+    const first = path.split('/').filter(Boolean)[0];
+    let stripped = path;
     if (first && locales.includes(first)) {
         const prefix = '/' + first;
-        stripped = href === prefix ? '/' : href.slice(prefix.length);
+        stripped = path === prefix ? '/' : path.slice(prefix.length);
+        stripped = untranslateRoutePath(stripped, first, defaultLocale, routes);
     }
+    const translated = translateRoutePath(stripped, locale, defaultLocale, routes);
     if (locale === defaultLocale)
-        return stripped;
-    return stripped === '/' ? '/' + locale : '/' + locale + stripped;
+        return translated + suffix;
+    return (translated === '/' ? '/' + locale : '/' + locale + translated) + suffix;
+}
+// ---------------------------------------------------------------------------
+// Route path translation (i18n.routes)
+// ---------------------------------------------------------------------------
+/** Translate a canonical (default-locale) pathname into its localized variant using the
+ * `i18n.routes` map. No locale prefix is added. The longest matching canonical prefix wins,
+ * so nested paths inherit parent mappings: with `{ '/projects': { it: '/progetti' } }`,
+ * `/projects/alpha` translates to `/progetti/alpha`. Unmapped paths pass through unchanged. */
+export function translateRoutePath(pathname, locale, defaultLocale, routes) {
+    if (!routes || locale === defaultLocale)
+        return pathname;
+    return mapPathByPrefix(pathname, compileRouteMap(routes, locale).forward);
+}
+/** Inverse of `translateRoutePath`: map a localized pathname (already stripped of its locale
+ * prefix) back to the canonical default-locale pathname routes are matched against. */
+export function untranslateRoutePath(pathname, locale, defaultLocale, routes) {
+    if (!routes || locale === defaultLocale)
+        return pathname;
+    return mapPathByPrefix(pathname, compileRouteMap(routes, locale).inverse);
+}
+const compiledRouteMaps = new WeakMap();
+function compileRouteMap(routes, locale) {
+    let byLocale = compiledRouteMaps.get(routes);
+    if (!byLocale) {
+        byLocale = new Map();
+        compiledRouteMaps.set(routes, byLocale);
+    }
+    let compiled = byLocale.get(locale);
+    if (!compiled) {
+        compiled = { forward: new Map(), inverse: new Map() };
+        for (const [canonicalRaw, translations] of Object.entries(routes)) {
+            const translatedRaw = translations?.[locale];
+            if (typeof translatedRaw !== 'string')
+                continue;
+            const canonical = normalizeRoutePathKey(canonicalRaw);
+            const translated = normalizeRoutePathKey(translatedRaw);
+            compiled.forward.set(canonical, translated);
+            compiled.inverse.set(translated, canonical);
+        }
+        byLocale.set(locale, compiled);
+    }
+    return compiled;
+}
+function normalizeRoutePathKey(p) {
+    let out = p.startsWith('/') ? p : '/' + p;
+    if (out.length > 1 && out.endsWith('/'))
+        out = out.slice(0, -1);
+    return out;
+}
+/** Replace the longest mapped segment prefix of `pathname`; unmapped paths pass through. */
+function mapPathByPrefix(pathname, mapping) {
+    if (!mapping.size || !pathname.startsWith('/'))
+        return pathname;
+    const segments = pathname.split('/').filter(Boolean);
+    for (let count = segments.length; count >= 1; count--) {
+        const prefix = '/' + segments.slice(0, count).join('/');
+        const mapped = mapping.get(prefix);
+        if (mapped === undefined)
+            continue;
+        const rest = segments.slice(count).join('/');
+        if (!rest)
+            return mapped;
+        return mapped === '/' ? '/' + rest : mapped + '/' + rest;
+    }
+    return pathname;
 }

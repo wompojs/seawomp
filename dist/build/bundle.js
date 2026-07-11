@@ -21,6 +21,7 @@ import { buildImages, writeOptimizedWebManifest } from './images.js';
 import { createFontBuildContext, localizeGoogleFontsInHtml } from './fonts.js';
 import { postProcessHtml } from './html-postprocess.js';
 import { prerender } from '../server/ssg.js';
+import { setSsrImageManifest } from '../shared/image-manifest.js';
 import { writeSitemap } from './sitemap.js';
 import { createHandler } from '../server/handler.js';
 import { discoverabilityHeadTags, writeDiscoverabilityFiles } from './discoverability.js';
@@ -158,6 +159,8 @@ export async function buildAll(cfg, cwd, opts = {}) {
     };
     await fs.writeFile(path.join(cfg.outDir, 'manifest.json'), serializeManifest(manifest), 'utf-8');
     // 6) Static HTML generation for routes that opt into build-time rendering.
+    // Register the image manifest so <seawomp-image> emits srcset directly in the SSR HTML.
+    setSsrImageManifest(imageManifest);
     const ssgRoutes = routes.map((r) => mapRouteToServerRoute(cwd, serverDir, r));
     const ssgSpecialRoutes = mapSpecialRoutesToServer(cwd, serverDir, specialRoutes);
     const ssgFrameworkHead = composeFrameworkHead(manifest, frameworkHead);
@@ -195,10 +198,14 @@ export async function buildAll(cfg, cwd, opts = {}) {
         cwd,
         transformHtml,
     });
-    const sitemap = await writeSitemap(staticDir, cfg.siteUrl, ssg.paths);
+    const sitemap = await writeSitemap(staticDir, cfg.siteUrl, ssg.sitemapPaths);
     if (sitemap)
         console.log('[seawomp] generated sitemap.xml');
-    const discoverabilityFiles = await writeDiscoverabilityFiles(staticDir, cfg, ssg.paths);
+    const excludedFromSitemap = ssg.paths.length - ssg.sitemapPaths.length;
+    if (excludedFromSitemap > 0) {
+        console.log(`[seawomp] excluded ${excludedFromSitemap} page(s) from sitemap (sitemap=false or noindex)`);
+    }
+    const discoverabilityFiles = await writeDiscoverabilityFiles(staticDir, cfg, ssg.sitemapPaths);
     if (discoverabilityFiles.length) {
         console.log(`[seawomp] generated ${discoverabilityFiles.length} discoverability file(s)`);
     }
@@ -408,7 +415,6 @@ function generateHydrateEntrySource(routes, i18n, navigation, clientEntryMap) {
         page: clientEntryMap.get(r.pagePath) ?? r.pagePath,
         layouts: r.layoutPaths.map((p) => clientEntryMap.get(p) ?? p),
     }));
-    const i18nConfig = i18n ? JSON.stringify(i18n) : 'null';
     const routerOptionsValue = {
         ...(i18n ? { i18n } : {}),
         ...(navigation ? { viewTransitions: navigation.viewTransitions } : {}),
@@ -417,10 +423,9 @@ function generateHydrateEntrySource(routes, i18n, navigation, clientEntryMap) {
         ? `setRouterOptions(${JSON.stringify(routerOptionsValue)});`
         : '';
     return `\
-import { hydrate, setRoutes, setRouterOptions } from 'seawomp/client';
+import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from 'seawomp/client';
 
 const routes = ${JSON.stringify(records)};
-const i18nConfig = ${i18nConfig};
 setRoutes(routes);
 ${routerOptions}
 
@@ -434,19 +439,8 @@ function compile(pattern) {
   return new RegExp('^' + parts.join('/') + '/?$');
 }
 
-function stripLocalePrefix(pathname) {
-  if (!i18nConfig) return pathname;
-  const first = pathname.split('/').filter(Boolean)[0];
-  const locale = first && i18nConfig.locales.includes(first) ? first : i18nConfig.defaultLocale;
-  if (locale === i18nConfig.defaultLocale) return pathname;
-  const prefix = '/' + locale;
-  if (pathname === prefix) return '/';
-  if (pathname.startsWith(prefix + '/')) return pathname.slice(prefix.length);
-  return pathname;
-}
-
 async function bootstrap() {
-  const p = stripLocalePrefix(location.pathname);
+  const p = canonicalPathname(location.pathname);
   for (const r of routes) {
     if (compile(r.pattern).test(p)) {
       for (const layout of r.layouts) await import(layout);

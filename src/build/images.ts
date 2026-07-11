@@ -107,7 +107,7 @@ export async function buildImages(
 	const sharp = await tryLoadSharp(opts.cwd);
 	if (!sharp) {
 		console.warn(
-			'[seawomp] `sharp` not installed — skipping image optimisation (originals served as-is).',
+			'[seawomp] skipped image compression — `sharp` is not installed (originals will be served as-is, no AVIF/WebP variants or srcset). Run `bun add sharp` to enable it.',
 		);
 	}
 

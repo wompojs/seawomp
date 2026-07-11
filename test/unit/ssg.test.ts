@@ -131,6 +131,80 @@ describe('prerender', () => {
     expect(it).toContain('lang="it"');
   });
 
+  it('emits translated localized paths when i18n.routes is configured', async () => {
+    write(
+      'projects/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Projects(){ return html\`<h1>projects</h1>\`; }
+       defineWompo(Projects, { name: 'ssg-i18n-translated' });
+       export default Projects;
+       export const prerender = true;`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const i18n = {
+      locales: ['en', 'it'],
+      defaultLocale: 'en',
+      routes: { '/projects': { it: '/progetti' } },
+    };
+    const r = await prerender({ routes, loadModule, outDir, i18n });
+    expect(r.paths.sort()).toEqual(['/it/progetti', '/projects']);
+    expect(fs.existsSync(path.join(outDir, 'it/progetti/index.html'))).toBe(true);
+    expect(fs.readFileSync(path.join(outDir, 'it/progetti/index.html'), 'utf-8')).toContain(
+      'projects',
+    );
+  });
+
+  it('keeps routes exporting `sitemap = false` out of sitemapPaths', async () => {
+    write(
+      'page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Home(){ return html\`<h1>home</h1>\`; }
+       defineWompo(Home, { name: 'ssg-sitemap-home' });
+       export default Home;
+       export const prerender = true;`,
+    );
+    write(
+      'admin/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Admin(){ return html\`<h1>admin</h1>\`; }
+       defineWompo(Admin, { name: 'ssg-sitemap-admin' });
+       export default Admin;
+       export const prerender = true;
+       export const sitemap = false;`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const r = await prerender({ routes, loadModule, outDir });
+    // The page is still prerendered — it just doesn't advertise itself.
+    expect(r.paths.sort()).toEqual(['/', '/admin']);
+    expect(r.sitemapPaths).toEqual(['/']);
+  });
+
+  it('keeps noindex pages out of sitemapPaths', async () => {
+    write(
+      'page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Home(){ return html\`<h1>home</h1>\`; }
+       defineWompo(Home, { name: 'ssg-noindex-home' });
+       export default Home;
+       export const prerender = true;`,
+    );
+    write(
+      'secret/page.ts',
+      `import { html, defineWompo } from 'wompo';
+       function Secret(){ return html\`<h1>secret</h1>\`; }
+       defineWompo(Secret, { name: 'ssg-noindex-secret' });
+       export default Secret;
+       export const prerender = true;
+       export function head() {
+         return html\`<meta name="robots" content="noindex, nofollow">\`;
+       }`,
+    );
+    const routes = scanRoutes(tmpRoot);
+    const r = await prerender({ routes, loadModule, outDir });
+    expect(r.paths.sort()).toEqual(['/', '/secret']);
+    expect(r.sitemapPaths).toEqual(['/']);
+  });
+
   it('does not auto-localize routes that declare their own paths', async () => {
     write(
       'blog/page.ts',

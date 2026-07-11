@@ -9,7 +9,6 @@ export function buildHydrateEntry(routes, opts = {}) {
         page: srcUrl(r.pagePath),
         layouts: r.layoutPaths.map(srcUrl),
     }));
-    const i18nConfig = opts.i18n ? JSON.stringify(opts.i18n) : 'null';
     const routerOptionsValue = {
         ...(opts.i18n ? { i18n: opts.i18n } : {}),
         ...(opts.navigation ? { viewTransitions: opts.navigation.viewTransitions } : {}),
@@ -21,10 +20,9 @@ export function buildHydrateEntry(routes, opts = {}) {
     // every module. `seawomp/client` itself registers `<seawomp-link>` and `<seawomp-image>` as a
     // side-effect — no need to import them separately here.
     return `\
-import { hydrate, setRoutes, setRouterOptions } from '/_dep/seawomp/client';
+import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from '/_dep/seawomp/client';
 
 const routes = ${JSON.stringify(records)};
-const i18nConfig = ${i18nConfig};
 setRoutes(routes);
 ${routerOptions}
 
@@ -38,19 +36,8 @@ function compile(pattern) {
   return new RegExp('^' + parts.join('/') + '/?$');
 }
 
-function stripLocalePrefix(pathname) {
-  if (!i18nConfig) return pathname;
-  const first = pathname.split('/').filter(Boolean)[0];
-  const locale = first && i18nConfig.locales.includes(first) ? first : i18nConfig.defaultLocale;
-  if (locale === i18nConfig.defaultLocale) return pathname;
-  const prefix = '/' + locale;
-  if (pathname === prefix) return '/';
-  if (pathname.startsWith(prefix + '/')) return pathname.slice(prefix.length);
-  return pathname;
-}
-
 async function bootstrap() {
-  const pathname = stripLocalePrefix(location.pathname);
+  const pathname = canonicalPathname(location.pathname);
   for (const r of routes) {
     if (compile(r.pattern).test(pathname)) {
       for (const layout of r.layouts) await import(layout);

@@ -1,25 +1,37 @@
 /* <seawomp-image> — built-in optimised image component, implemented as a Wompo component.
  *
- * SSR: renders a full `<span.seawomp-image__wrap> > <img>` tree server-side so crawlers see
- * the real markup and no layout shift occurs.
+ * SSR: used as an interpolated component (`<${Image} …>`), renders a full
+ * `<span.seawomp-image__wrap> > <img>` tree server-side so crawlers see the real markup and
+ * no layout shift occurs. When the build image manifest is registered (SSG and `seawomp
+ * start` do this automatically), `srcset` is emitted directly in the SSR HTML — first paint
+ * and the LCP preload use the optimized variants without waiting for hydration. A literal
+ * `<seawomp-image>` tag is instead emitted as-is and builds its DOM on connect.
  *
  * Client: hydrates as a Wompo custom element. Tracks the `load` event via state; also checks
  * `img.complete` on mount so images served from the browser cache are never stuck showing the
  * placeholder.
  *
- * Build-time variant manifest: when `window.__SEAWOMP_IMAGES` is populated by the production
- * handler (injected into `<head>`), the component builds a `srcset` automatically from the
- * list of resized / reformatted variants the build pipeline generated.
+ * Build-time variant manifest: `window.__SEAWOMP_IMAGES` (client, injected into `<head>` by
+ * the production handler) and `getSsrImageManifest()` (server) expose the resized /
+ * reformatted variants the build pipeline generated; the component builds a `srcset`
+ * automatically from them.
  *
  * Attributes / Props:
- *   src         — required
- *   alt         — required for a11y (warns when absent)
- *   srcset      — passes through; auto-populated from __SEAWOMP_IMAGES when not provided
- *   sizes       — passes through
- *   width/height — used to reserve aspect-ratio space
- *   ratio       — CSS aspect-ratio override (e.g. "4/3") when width/height are not provided
- *   priority    — boolean; eager loading + fetchpriority=high + decoding=sync
- *   placeholder — "blur" | "none"; default "blur"
+ *   src            — required
+ *   alt            — required for a11y (warns when absent)
+ *   srcset         — passes through; auto-populated from the build manifest when not provided
+ *   sizes          — passes through
+ *   width/height   — used to reserve aspect-ratio space
+ *   ratio          — CSS aspect-ratio override (e.g. "4/3") when width/height are not provided
+ *   priority       — boolean; eager loading + fetchpriority=high + decoding=sync
+ *   placeholder    — "blur" | "none"; default "blur"
+ *   loading        — "eager" | "lazy"; overrides the `priority` default
+ *   decoding       — "sync" | "async" | "auto"; overrides the `priority` default
+ *   fetchpriority  — "high" | "low" | "auto"; overrides the `priority` default
+ *   crossorigin    — passes through to the inner <img>
+ *   referrerpolicy — passes through to the inner <img>
+ *   usemap         — passes through to the inner <img>
+ *   ismap          — boolean; passes through to the inner <img>
  *
  * Required global CSS (ship your own, the framework emits none):
  *   .seawomp-image__wrap { position: relative; display: block; overflow: hidden; }
@@ -28,16 +40,24 @@
  *   .seawomp-image--loaded .seawomp-image__placeholder { opacity: 0; }
  */
 import { defineWompo, html, useState, useEffect, useRef, } from 'wompo';
-function SeawompImage({ src = '', alt = '', srcset: srcsetProp = '', sizes = '', width, height, ratio, priority = false, placeholder = 'blur', }) {
+import { getSsrImageManifest } from '../shared/image-manifest.js';
+function SeawompImage({ src = '', alt = '', srcset: srcsetProp = '', sizes = '', width, height, ratio, priority = false, placeholder = 'blur', loading, decoding, fetchpriority, crossorigin, referrerpolicy, usemap, ismap = false, }) {
     const [loaded, setLoaded] = useState(false);
     const imgRef = useRef(null);
     if (!alt && src && typeof console !== 'undefined') {
         console.warn('[seawomp-image] missing `alt` attribute on', src);
     }
     // Auto-populate srcset from the build-time manifest when not explicitly provided.
+    // Server-side the manifest is registered by SSG / the prod handler; client-side it's
+    // injected into <head> as window.__SEAWOMP_IMAGES. Both hold the same data, so the SSR
+    // markup and the hydrated render agree.
     let srcset = srcsetProp;
-    if (!srcset && src && typeof window !== 'undefined' && window.__SEAWOMP_IMAGES?.[src]) {
-        srcset = window.__SEAWOMP_IMAGES[src].map((v) => `${v.src} ${v.width}w`).join(', ');
+    if (!srcset && src) {
+        const manifest = typeof window === 'undefined' ? getSsrImageManifest() : window.__SEAWOMP_IMAGES;
+        const variants = manifest?.[src];
+        if (variants?.length) {
+            srcset = variants.map((v) => `${v.src} ${v.width}w`).join(', ');
+        }
     }
     // After client mount: if the image was already in the cache the `load` event never fires.
     useEffect(() => {
@@ -56,9 +76,13 @@ function SeawompImage({ src = '', alt = '', srcset: srcsetProp = '', sizes = '',
 				ref="${imgRef}"
 				src="${src || undefined}"
 				alt="${alt}"
-				decoding="${priority ? 'sync' : 'async'}"
-				loading="${priority ? 'eager' : 'lazy'}"
-				fetchpriority="${priority ? 'high' : undefined}"
+				decoding="${decoding ?? (priority ? 'sync' : 'async')}"
+				loading="${loading ?? (priority ? 'eager' : 'lazy')}"
+				fetchpriority="${fetchpriority ?? (priority ? 'high' : undefined)}"
+				crossorigin="${crossorigin}"
+				referrerpolicy="${referrerpolicy || undefined}"
+				usemap="${usemap || undefined}"
+				ismap="${ismap || undefined}"
 				srcset="${srcset || undefined}"
 				sizes="${sizes || undefined}"
 				width="${width}"

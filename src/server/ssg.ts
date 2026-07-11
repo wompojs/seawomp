@@ -14,7 +14,7 @@ import { createHandler } from './handler.js';
 import type { RouteEntry, SpecialRouteEntry } from './routes.js';
 import type { RedirectRule } from '../config.js';
 import type { PageModule, StaticPath } from '../types.js';
-import { localizeUrl, type I18nConfig } from '../i18n/index.js';
+import { localizePathname, type I18nConfig } from '../i18n/index.js';
 
 export interface SsgOptions {
   routes: RouteEntry[];
@@ -37,6 +37,9 @@ export interface SsgOptions {
 export interface SsgResult {
   written: string[];
   paths: string[];
+  /** Subset of `paths` eligible for sitemap.xml / sitemap.txt / llms.txt: excludes routes
+   * exporting `sitemap = false` and pages whose rendered HTML carries a robots noindex meta. */
+  sitemapPaths: string[];
   skipped: { pattern: string; reason: string }[];
 }
 
@@ -57,6 +60,7 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
 
   const written: string[] = [];
   const writtenPaths: string[] = [];
+  const sitemapPaths: string[] = [];
   const skipped: { pattern: string; reason: string }[] = [];
 
   for (const route of opts.routes) {
@@ -81,6 +85,7 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
     // for declaring any localized variants themselves, so they're left untouched.
     const autoLocalize = Boolean(opts.i18n) && flag === true && !pageMod.generateStaticPaths;
     const paths = autoLocalize ? localizeStaticPaths(basePaths, opts.i18n!) : basePaths;
+    const routeInSitemap = pageMod.sitemap !== false;
 
     for (const p of paths) {
       const req = new Request(new URL(p, origin));
@@ -96,20 +101,42 @@ export async function prerender(opts: SsgOptions): Promise<SsgResult> {
       await fs.writeFile(fileAbs, html, 'utf-8');
       written.push(fileAbs);
       writtenPaths.push(p);
+      if (routeInSitemap && !hasNoindexMeta(html)) sitemapPaths.push(p);
     }
   }
 
-  return { written, paths: writtenPaths, skipped };
+  return { written, paths: writtenPaths, sitemapPaths, skipped };
 }
 
-/** Expand each canonical (default-locale) path into one entry per configured locale. */
+/** Whether the rendered document opts out of indexing via `<meta name="robots">` whose
+ * content includes the `noindex` (or `none`) directive. Such pages must not be listed in
+ * the sitemap — a noindex URL in sitemap.xml is a contradictory signal for crawlers. */
+export function hasNoindexMeta(html: string): boolean {
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    const name = metaAttr(tag, 'name');
+    if (!name || name.toLowerCase() !== 'robots') continue;
+    const content = metaAttr(tag, 'content') ?? '';
+    if (/(^|[\s,])(noindex|none)([\s,]|$)/i.test(content)) return true;
+  }
+  return false;
+}
+
+function metaAttr(tag: string, name: string): string | null {
+  const quoted = new RegExp(`\\s${name}\\s*=\\s*(['"])(.*?)\\1`, 'i').exec(tag);
+  if (quoted) return quoted[2];
+  const bare = new RegExp(`\\s${name}\\s*=\\s*([^\\s>]+)`, 'i').exec(tag);
+  return bare ? bare[1] : null;
+}
+
+/** Expand each canonical (default-locale) path into one entry per configured locale,
+ * applying the `i18n.routes` translation map (`/projects` → `/it/progetti`). */
 function localizeStaticPaths(paths: string[], i18n: I18nConfig): string[] {
   const out: string[] = [];
   for (const p of paths) {
     out.push(p);
     for (const locale of i18n.locales) {
       if (locale === i18n.defaultLocale) continue;
-      out.push(localizeUrl(p, locale, i18n.defaultLocale));
+      out.push(localizePathname(p, locale, i18n));
     }
   }
   return out;

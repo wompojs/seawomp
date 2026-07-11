@@ -99,6 +99,7 @@ function computeLocaleValue(i18n, props) {
         locale: getLocale(props.url, i18n),
         defaultLocale: i18n.defaultLocale,
         locales: i18n.locales,
+        routes: i18n.routes,
     };
 }
 async function renderHeadFragment(runtime, entries) {

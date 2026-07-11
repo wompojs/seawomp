@@ -22,6 +22,20 @@ export interface SeawompImageProps extends WompoProps {
     priority?: boolean;
     /** "blur" shows a solid-colour placeholder until the image loads. "none" omits it. */
     placeholder?: 'blur' | 'none';
+    /** Native <img> loading mode. Overrides the `priority`-derived default. */
+    loading?: 'eager' | 'lazy';
+    /** Native <img> decoding hint. Overrides the `priority`-derived default. */
+    decoding?: 'sync' | 'async' | 'auto';
+    /** Native <img> fetch priority. Overrides the `priority`-derived default. */
+    fetchpriority?: 'high' | 'low' | 'auto';
+    /** Native <img> CORS mode. */
+    crossorigin?: 'anonymous' | 'use-credentials' | '';
+    /** Native <img> referrer policy. */
+    referrerpolicy?: string;
+    /** Native <img> usemap — links the image to a <map>. */
+    usemap?: string;
+    /** Native <img> ismap — the image is part of a server-side image map. */
+    ismap?: boolean;
 }
-declare function SeawompImage({ src, alt, srcset: srcsetProp, sizes, width, height, ratio, priority, placeholder, }: SeawompImageProps): import("wompo").RenderHtml;
+declare function SeawompImage({ src, alt, srcset: srcsetProp, sizes, width, height, ratio, priority, placeholder, loading, decoding, fetchpriority, crossorigin, referrerpolicy, usemap, ismap, }: SeawompImageProps): import("wompo").RenderHtml;
 export default SeawompImage;

@@ -17,9 +17,9 @@ describe('buildHydrateEntry', () => {
 			{ i18n: { locales: ['en', 'it'], defaultLocale: 'en' } },
 		);
 
-		expect(source).toContain("import { hydrate, setRoutes, setRouterOptions }");
+		expect(source).toContain("import { hydrate, setRoutes, setRouterOptions, canonicalPathname }");
 		expect(source).toContain('setRouterOptions({"i18n":{"locales":["en","it"],"defaultLocale":"en"}});');
-		expect(source).toContain('const pathname = stripLocalePrefix(location.pathname);');
+		expect(source).toContain('const pathname = canonicalPathname(location.pathname);');
 		expect(source).toContain('"pattern":"/docs/:slug*"');
 	});
 
@@ -54,5 +54,28 @@ describe('seoI18nHead', () => {
 		expect(head).toContain('hreflang="x-default"');
 		expect(head).toContain('<meta property="og:url" content="https://example.com/it/docs/intro">');
 		expect(head).toContain('<meta property="og:locale" content="it_IT">');
+	});
+
+	it('applies i18n.routes translations to canonical and hreflang alternates', async () => {
+		const fragment = seoI18nHead({
+			siteUrl: 'https://example.com',
+			pathname: '/it/progetti',
+			i18n: {
+				locales: ['en', 'it'],
+				defaultLocale: 'en',
+				routes: { '/projects': { it: '/progetti' } },
+			},
+		});
+		function Head() {
+			return fragment;
+		}
+		defineWompo(Head, { name: 'tu-seo-head-translated' });
+		const head = (await renderToString(Head, {}, { hydration: 'none', css: 'none' })).html;
+
+		expect(head).toContain('<link rel="canonical" href="https://example.com/it/progetti">');
+		expect(head).toContain('href="https://example.com/projects"');
+		expect(head).toContain('href="https://example.com/it/progetti"');
+		// The untranslated localized URL must never appear as an alternate.
+		expect(head).not.toContain('https://example.com/it/projects');
 	});
 });

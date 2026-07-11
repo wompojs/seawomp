@@ -27,9 +27,10 @@ import {
 import {
 	getLocale,
 	hasLocalePrefix,
-	localizeUrl,
+	localizePathname,
 	preferredLocaleFromAcceptLanguage,
 	stripLocalePrefix,
+	untranslateRoutePath,
 	type I18nConfig,
 } from '../i18n/index.js';
 
@@ -80,8 +81,16 @@ export function createHandler(opts: HandlerOptions): (request: Request) => Promi
     const browserLocaleRedirect = getBrowserLocaleRedirect(request, url, opts.i18n, locale);
     if (browserLocaleRedirect) return browserLocaleRedirect;
 
+    // Route matching happens on the canonical (default-locale) pathname: strip the locale
+    // prefix, then map translated slugs (`/progetti`) back to their canonical form
+    // (`/projects`) via the i18n.routes map.
     const pathname = locale && opts.i18n
-      ? stripLocalePrefix(rawPathname, locale, opts.i18n.defaultLocale)
+      ? untranslateRoutePath(
+          stripLocalePrefix(rawPathname, locale, opts.i18n.defaultLocale),
+          locale,
+          opts.i18n.defaultLocale,
+          opts.i18n.routes,
+        )
       : rawPathname;
 
     // Server-action endpoint (precedes route matching so it can't collide with a page route).
@@ -102,6 +111,19 @@ export function createHandler(opts: HandlerOptions): (request: Request) => Promi
       }
       if (apiResp) return apiResp;
     }
+    // Canonicalize translated routes: when i18n.routes is configured, the localized URL
+    // (`/it/progetti`) is the only canonical address — permanently redirect the untranslated
+    // variant (`/it/projects`) so the same page isn't served from two URLs.
+    if (opts.i18n?.routes && locale && (request.method === 'GET' || request.method === 'HEAD')) {
+      const canonical = localizePathname(pathname, locale, opts.i18n);
+      if (normalizeTrailingSlash(canonical) !== normalizeTrailingSlash(rawPathname)) {
+        return new Response(null, {
+          status: 308,
+          headers: { location: canonical + url.search },
+        });
+      }
+    }
+
     for (const r of compiled) {
       const m = pathname.match(r.regex);
       if (!m) continue;
@@ -232,7 +254,7 @@ function getBrowserLocaleRedirect(
 	if (preferred === currentLocale) return null;
 
 	const redirectUrl = new URL(url.href);
-	redirectUrl.pathname = localizeUrl(url.pathname, preferred, i18n.defaultLocale);
+	redirectUrl.pathname = localizePathname(url.pathname, preferred, i18n);
 	return new Response(null, {
 		status: 307,
 		headers: {
@@ -240,6 +262,11 @@ function getBrowserLocaleRedirect(
 			vary: 'Accept-Language',
 		},
 	});
+}
+
+function normalizeTrailingSlash(pathname: string): string {
+	if (!pathname) return '/';
+	return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
 }
 
 function acceptsHtml(request: Request): boolean {

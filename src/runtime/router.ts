@@ -19,7 +19,7 @@
 import { hydrate } from 'wompo/hydrate';
 import { useEffect, useSelf, useState, type WompoElement } from 'wompo';
 import { applyHead } from './head.js';
-import { setClientI18nConfig } from '../i18n/context.js';
+import { setClientI18nConfig, untranslateRoutePath, type I18nRouteMap } from '../i18n/context.js';
 
 export interface RouteRecord {
 	pattern: string;
@@ -31,6 +31,8 @@ export interface RouterI18nConfig {
 	locales: string[];
 	defaultLocale: string;
 	detectBrowserLocale?: boolean;
+	/** Translated route pathnames keyed by canonical path (see `I18nConfig.routes`). */
+	routes?: I18nRouteMap;
 }
 
 export interface RouterViewTransitionOptions {
@@ -529,9 +531,18 @@ function stripLocalePrefix(pathname: string): string {
 	const locale = getLocale(pathname);
 	if (locale === i18nConfig.defaultLocale) return pathname;
 	const prefix = '/' + locale;
-	if (pathname === prefix) return '/';
-	if (pathname.startsWith(prefix + '/')) return pathname.slice(prefix.length);
-	return pathname;
+	let stripped = pathname;
+	if (pathname === prefix) stripped = '/';
+	else if (pathname.startsWith(prefix + '/')) stripped = pathname.slice(prefix.length);
+	return untranslateRoutePath(stripped, locale, i18nConfig.defaultLocale, i18nConfig.routes);
+}
+
+/** Canonical (default-locale) pathname for a localized URL: locale prefix stripped and
+ * translated slugs (i18n.routes) mapped back. This is the pathname the route table matches
+ * against — used by the hydrate-entry bootstrap to pick the initial page module. Requires
+ * `setRouterOptions({ i18n })` to have been called; without i18n it returns the input. */
+export function canonicalPathname(pathname: string): string {
+	return stripLocalePrefix(pathname);
 }
 
 /** Document-level click delegation for plain `<a>` elements.

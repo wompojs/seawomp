@@ -27,6 +27,7 @@ import {
 	getActiveSsrPath,
 	getClientI18nConfig,
 	localizeHref,
+	untranslateRoutePath,
 	type LocaleContextValue,
 } from '../i18n/context.js';
 
@@ -260,7 +261,7 @@ function resolveHref(href: string, localeOverride: string | undefined): string {
 	const ctx = activeLocaleContext();
 	if (!ctx) return href;
 	const locale = localeOverride ?? ctx.locale;
-	return localizeHref(href, locale, ctx.defaultLocale, ctx.locales);
+	return localizeHref(href, locale, ctx.defaultLocale, ctx.locales, ctx.routes);
 }
 
 function activeLocaleContext(): LocaleContextValue | null {
@@ -271,21 +272,24 @@ function activeLocaleContext(): LocaleContextValue | null {
 		locale: detectClientLocale(),
 		defaultLocale: config.defaultLocale,
 		locales: config.locales,
+		routes: config.routes,
 	};
 }
 
-/** Strip a leading locale prefix from `pathname` using the active SSR/client locale config.
- * Mirrors `localizeHref`'s parsing so the round-trip
- * `localizeHref(stripLocaleFromPathname(p), locale, default, locales)` is well-defined. */
+/** Strip a leading locale prefix from `pathname` (untranslating i18n.routes slugs back to
+ * canonical) using the active SSR/client locale config. Mirrors `localizeHref`'s parsing so
+ * the round-trip `localizeHref(stripLocaleFromPathname(p), locale, default, locales, routes)`
+ * is well-defined. */
 function stripLocaleFromPathname(pathname: string): string {
 	const ctx = activeLocaleContext();
 	if (!ctx) return pathname;
 	const first = pathname.split('/').filter(Boolean)[0];
 	if (!first || !ctx.locales.includes(first)) return pathname;
 	const prefix = '/' + first;
-	if (pathname === prefix) return '/';
-	if (pathname.startsWith(prefix + '/')) return pathname.slice(prefix.length);
-	return pathname;
+	let stripped = pathname;
+	if (pathname === prefix) stripped = '/';
+	else if (pathname.startsWith(prefix + '/')) stripped = pathname.slice(prefix.length);
+	return untranslateRoutePath(stripped, first, ctx.defaultLocale, ctx.routes);
 }
 
 /** Effective pathname for a `follow="path"` link — `window.location.pathname` on the client,
