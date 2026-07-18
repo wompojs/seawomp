@@ -9,6 +9,7 @@ export {
 	navigate,
 	prefetchRoute,
 	setRoutes,
+	setSpecialRoutes,
 	setRouterOptions,
 	clearPrefetchCache,
 	canonicalPathname,
@@ -18,6 +19,8 @@ export {
 } from './router.js';
 export type {
 	RouteRecord,
+	SpecialRouteRecord,
+	SpecialRouteRecords,
 	RouteSnapshot,
 	RouterOptions,
 	RouterI18nConfig,

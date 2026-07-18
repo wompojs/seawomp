@@ -34,6 +34,11 @@ export interface BuildManifest {
     head?: {
         framework?: string;
     };
+    /** Localized Google Fonts map: decoded `fonts.googleapis.com/css…` href → local
+     * `/_assets/fonts/…` asset. Present only when the build localized at least one font. The
+     * runtime SSR path replays this rewrite so SSR-rendered documents (404/error, non-prerendered
+     * routes) reference the same local stylesheet as prerendered pages. */
+    fonts?: Record<string, string>;
     notFoundRoute?: SpecialRouteManifestEntry;
     errorRoute?: SpecialRouteManifestEntry;
 }

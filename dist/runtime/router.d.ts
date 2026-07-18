@@ -34,8 +34,26 @@ export interface RouteSnapshot {
     params: Record<string, string>;
     route: RouteRecord | null;
 }
+/** Client chunk record for a special route (404 / error) — page + layout module URLs. Same shape
+ * as a `RouteRecord` minus the URL pattern (special routes aren't matched by path). */
+export interface SpecialRouteRecord {
+    page: string;
+    layouts: string[];
+}
+export interface SpecialRouteRecords {
+    notFound: SpecialRouteRecord | null;
+    error: SpecialRouteRecord | null;
+}
 /** Register the dev/build route table. Called once from the hydrate-entry bootstrap. */
 export declare function setRoutes(rs: RouteRecord[]): void;
+/** Register the 404 / error special-route chunk records. Called once from the hydrate-entry
+ * bootstrap. A special-route document (404/error) has no matching entry in the normal route table,
+ * so when the user navigates *away* from one the router can't tell whether the destination shares
+ * the same layout shell — and defaults to replacing the whole `<body>`, which tears down and
+ * recreates layout islands (e.g. a page-transition overlay island replays its mount animation,
+ * producing a visible double transition). With these records the router recognizes the shared
+ * layout chain via the live `data-seawomp-render` marker and swaps only the route-view instead. */
+export declare function setSpecialRoutes(s: SpecialRouteRecords): void;
 /** Tunable router knobs — call before any prefetches if you want to override defaults. */
 export declare function setRouterOptions(opts: RouterOptions): void;
 /** Drop the prefetch HTML cache. Mostly useful in tests. */
@@ -45,6 +63,13 @@ export declare function navigate(href: string): Promise<void>;
 export declare function prefetchRoute(href: string, opts?: {
     preloadModules?: boolean;
 }): void;
+/** The layout chunk chain of the document we're navigating away from. Normal routes carry it in
+ * their record; a 404/error document has no matching route record, so we fall back to the
+ * registered special-route record identified by the live `data-seawomp-render` marker. Returns
+ * null when the origin can't be identified — the caller then does a full-body swap.
+ *
+ * Exported for unit testing (it's DOM-free); not part of the public runtime API. */
+export declare function currentLayoutsFor(currentRoute: RouteRecord | null, fromRenderKind: string | null | undefined): string[] | null;
 export type NavigationState = 'idle' | 'loading';
 export interface NavigationSnapshot {
     state: NavigationState;

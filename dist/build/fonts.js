@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { findGoogleFontLinks, localFontLinkTag, stripGoogleFontPreconnects, } from '../shared/font-localize.js';
 export function createFontBuildContext(outAssetsDir) {
     return {
         outAssetsDir,
@@ -15,26 +16,20 @@ export async function localizeGoogleFontsInHtml(html, ctx) {
         const localHref = await localizeGoogleFontHref(link.href, ctx);
         if (!localHref)
             continue;
-        const localTag = `<link rel="stylesheet" href="${escapeAttr(localHref)}" data-seawomp-font="local">`;
-        out = out.replace(link.tag, localTag);
+        out = out.replace(link.tag, localFontLinkTag(localHref));
     }
     return out;
 }
-function stripGoogleFontPreconnects(html) {
-    return html.replace(/<link\b(?=[^>]*rel=["']?preconnect["']?)(?=[^>]*href=["']https:\/\/fonts\.(?:googleapis|gstatic)\.com["'])[^>]*>/gi, '');
-}
-function findGoogleFontLinks(html) {
-    const out = [];
-    const re = /<link\b(?=[^>]*rel=["']?stylesheet["']?)[^>]*>/gi;
-    let match;
-    while ((match = re.exec(html))) {
-        const href = attrValue(match[0], 'href');
-        if (!href)
-            continue;
-        const decoded = href.replace(/&amp;/g, '&');
-        if (/^https:\/\/fonts\.googleapis\.com\/css2?\?/i.test(decoded)) {
-            out.push({ tag: match[0], href: decoded });
-        }
+/** Resolve the accumulated font cache into a plain `{ decodedGoogleFontsHref → localAssetHref }`
+ * map (dropping any that failed to download). Baked into the build manifest so the runtime SSR
+ * path can apply the identical rewrite without re-downloading. Call after every HTML has been
+ * localized. */
+export async function collectFontMap(ctx) {
+    const out = {};
+    for (const [href, promise] of ctx.cache) {
+        const local = await promise;
+        if (local)
+            out[href] = local;
     }
     return out;
 }
@@ -97,14 +92,4 @@ function extensionFromUrl(url) {
     const pathname = new URL(url).pathname;
     const ext = path.extname(pathname).toLowerCase();
     return ext || '.woff2';
-}
-function attrValue(tag, name) {
-    const quoted = new RegExp(`\\s${name}\\s*=\\s*(['"])(.*?)\\1`, 'i').exec(tag);
-    if (quoted)
-        return quoted[2];
-    const bare = new RegExp(`\\s${name}\\s*=\\s*([^\\s>]+)`, 'i').exec(tag);
-    return bare ? bare[1] : null;
-}
-function escapeAttr(value) {
-    return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }

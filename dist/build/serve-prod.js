@@ -14,6 +14,7 @@ import { setSsrImageManifest } from '../shared/image-manifest.js';
 import { compileRedirects, matchRedirect } from '../server/redirects.js';
 import { postProcessHtml } from './html-postprocess.js';
 import { discoverabilityHeadTags } from './discoverability.js';
+import { localizeGoogleFontsWithMap } from '../shared/font-localize.js';
 export async function loadBuildManifest(cfg) {
     let manifest;
     try {
@@ -75,7 +76,12 @@ export async function createProdHandler(cfg, cwd) {
             if (resp.headers.get('content-type')?.startsWith('text/html')) {
                 const body = await resp.text();
                 const headers = new Headers(resp.headers);
-                const processed = postProcessHtml(body, { minify: cfg.minify.html, optimizeLcp: true });
+                // Replay the build's Google Fonts → local rewrite on SSR-rendered documents (404/error,
+                // non-prerendered routes). Without this they'd keep the fonts.googleapis.com <link> while
+                // prerendered pages use the local one, so an SPA navigation from an SSR-only route to a
+                // prerendered page swaps the head between mismatched links and loses the fonts.
+                const localized = localizeGoogleFontsWithMap(body, manifest.fonts);
+                const processed = postProcessHtml(localized, { minify: cfg.minify.html, optimizeLcp: true });
                 return new Response(compressResponseBody(new TextEncoder().encode(processed), headers.get('content-type'), req, headers), { status: resp.status, headers });
             }
             return resp;

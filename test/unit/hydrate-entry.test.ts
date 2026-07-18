@@ -17,7 +17,7 @@ describe('buildHydrateEntry', () => {
 			{ i18n: { locales: ['en', 'it'], defaultLocale: 'en' } },
 		);
 
-		expect(source).toContain("import { hydrate, setRoutes, setRouterOptions, canonicalPathname }");
+		expect(source).toContain("import { hydrate, setRoutes, setSpecialRoutes, setRouterOptions, canonicalPathname }");
 		expect(source).toContain('setRouterOptions({"i18n":{"locales":["en","it"],"defaultLocale":"en"}});');
 		expect(source).toContain('const pathname = canonicalPathname(location.pathname);');
 		expect(source).toContain('"pattern":"/docs/:slug*"');
@@ -59,6 +59,9 @@ describe('buildHydrateEntry', () => {
 		expect(source).toContain(
 			'const special = {"notFound":{"page":"/_src/repo/app/404.ts","layouts":["/_src/repo/app/layout.ts"]},"error":{"page":"/_src/repo/app/error.ts","layouts":["/_src/repo/app/layout.ts"]}};',
 		);
+		// The special records are registered with the router so a navigation *away from* a
+		// 404/error document can reuse their layout chain for the same-shell swap decision.
+		expect(source).toContain('setSpecialRoutes(special);');
 		// The bootstrap prefers the SSR render marker, then URL match, then the 404 fallback.
 		expect(source).toContain("document.documentElement.getAttribute('data-seawomp-render')");
 		expect(source).toContain("kind === 'not-found'");

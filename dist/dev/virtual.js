@@ -31,11 +31,12 @@ export function buildHydrateEntry(routes, opts = {}) {
     // every module. `seawomp/client` itself registers `<seawomp-link>` and `<seawomp-image>` as a
     // side-effect — no need to import them separately here.
     return `\
-import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from '/_dep/seawomp/client';
+import { hydrate, setRoutes, setSpecialRoutes, setRouterOptions, canonicalPathname } from '/_dep/seawomp/client';
 
 const routes = ${JSON.stringify(records)};
 const special = ${JSON.stringify(special)};
 setRoutes(routes);
+setSpecialRoutes(special);
 ${routerOptions}
 
 ${HYDRATE_BOOTSTRAP_BODY}

@@ -19,7 +19,7 @@ import { scanRoutes, scanSpecialRoutes, type RouteEntry, type SpecialRouteEntry,
 import { scanApiRoutes } from '../server/api-router.js';
 import { manifestFromRoutes, serializeManifest, type BuildManifest, type SpecialRouteManifestEntry } from '../server/manifest.js';
 import { buildImages, writeOptimizedWebManifest } from './images.js';
-import { createFontBuildContext, localizeGoogleFontsInHtml } from './fonts.js';
+import { collectFontMap, createFontBuildContext, localizeGoogleFontsInHtml } from './fonts.js';
 import { postProcessHtml } from './html-postprocess.js';
 import { prerender } from '../server/ssg.js';
 import { setSsrImageManifest } from '../shared/image-manifest.js';
@@ -195,7 +195,9 @@ export async function buildAll(
 			? specialRouteToManifest(cwd, cfg.outDir, serverDir, specialRoutes.errorRoute)
 			: undefined,
 	};
-	await fs.writeFile(path.join(cfg.outDir, 'manifest.json'), serializeManifest(manifest), 'utf-8');
+	// The manifest is written after step 6 so it can carry the font map: prerender + the static 404
+	// are what populate `fontContext`, and the runtime SSR path reads `manifest.fonts` to replay the
+	// same Google Fonts → local rewrite. Nothing reads manifest.json mid-build, so deferring is safe.
 
 	// 6) Static HTML generation for routes that opt into build-time rendering.
 	// Register the image manifest so <seawomp-image> emits srcset directly in the SSR HTML.
@@ -237,6 +239,14 @@ export async function buildAll(
 		cwd,
 		transformHtml,
 	});
+
+	// Bake the localized-font map into the manifest (now that every HTML has been localized) and
+	// write it. The runtime SSR path uses `manifest.fonts` to give SSR-only routes (404/error,
+	// non-prerendered pages) the same local font stylesheet prerendered pages already carry.
+	const fontMap = await collectFontMap(fontContext);
+	if (Object.keys(fontMap).length) manifest.fonts = fontMap;
+	await fs.writeFile(path.join(cfg.outDir, 'manifest.json'), serializeManifest(manifest), 'utf-8');
+
 	const sitemap = await writeSitemap(staticDir, cfg.siteUrl, ssg.sitemapPaths);
 	if (sitemap) console.log('[seawomp] generated sitemap.xml');
 	const excludedFromSitemap = ssg.paths.length - ssg.sitemapPaths.length;
@@ -536,11 +546,12 @@ function generateHydrateEntrySource(
 		? `setRouterOptions(${JSON.stringify(routerOptionsValue)});`
 		: '';
 	return `\
-import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from 'seawomp/client';
+import { hydrate, setRoutes, setSpecialRoutes, setRouterOptions, canonicalPathname } from 'seawomp/client';
 
 const routes = ${JSON.stringify(records)};
 const special = ${JSON.stringify(special)};
 setRoutes(routes);
+setSpecialRoutes(special);
 ${routerOptions}
 
 ${HYDRATE_BOOTSTRAP_BODY}

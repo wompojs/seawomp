@@ -1,9 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+	findGoogleFontLinks,
+	localFontLinkTag,
+	stripGoogleFontPreconnects,
+} from '../shared/font-localize.js';
 
 export interface FontBuildContext {
 	outAssetsDir: string;
 	publicPrefix: string;
+	/** Maps each decoded Google Fonts href to its localized `/_assets/fonts/…` asset (or `null`
+	 * when the download failed). Persisted to the manifest via `collectFontMap` so the runtime SSR
+	 * path can apply the same rewrite. */
 	cache: Map<string, Promise<string | null>>;
 	written: number;
 }
@@ -26,30 +34,20 @@ export async function localizeGoogleFontsInHtml(
 	for (const link of links) {
 		const localHref = await localizeGoogleFontHref(link.href, ctx);
 		if (!localHref) continue;
-		const localTag = `<link rel="stylesheet" href="${escapeAttr(localHref)}" data-seawomp-font="local">`;
-		out = out.replace(link.tag, localTag);
+		out = out.replace(link.tag, localFontLinkTag(localHref));
 	}
 	return out;
 }
 
-function stripGoogleFontPreconnects(html: string): string {
-	return html.replace(
-		/<link\b(?=[^>]*rel=["']?preconnect["']?)(?=[^>]*href=["']https:\/\/fonts\.(?:googleapis|gstatic)\.com["'])[^>]*>/gi,
-		'',
-	);
-}
-
-function findGoogleFontLinks(html: string): Array<{ tag: string; href: string }> {
-	const out: Array<{ tag: string; href: string }> = [];
-	const re = /<link\b(?=[^>]*rel=["']?stylesheet["']?)[^>]*>/gi;
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(html))) {
-		const href = attrValue(match[0], 'href');
-		if (!href) continue;
-		const decoded = href.replace(/&amp;/g, '&');
-		if (/^https:\/\/fonts\.googleapis\.com\/css2?\?/i.test(decoded)) {
-			out.push({ tag: match[0], href: decoded });
-		}
+/** Resolve the accumulated font cache into a plain `{ decodedGoogleFontsHref → localAssetHref }`
+ * map (dropping any that failed to download). Baked into the build manifest so the runtime SSR
+ * path can apply the identical rewrite without re-downloading. Call after every HTML has been
+ * localized. */
+export async function collectFontMap(ctx: FontBuildContext): Promise<Record<string, string>> {
+	const out: Record<string, string> = {};
+	for (const [href, promise] of ctx.cache) {
+		const local = await promise;
+		if (local) out[href] = local;
 	}
 	return out;
 }
@@ -123,15 +121,4 @@ function extensionFromUrl(url: string): string {
 	const pathname = new URL(url).pathname;
 	const ext = path.extname(pathname).toLowerCase();
 	return ext || '.woff2';
-}
-
-function attrValue(tag: string, name: string): string | null {
-	const quoted = new RegExp(`\\s${name}\\s*=\\s*(['"])(.*?)\\1`, 'i').exec(tag);
-	if (quoted) return quoted[2];
-	const bare = new RegExp(`\\s${name}\\s*=\\s*([^\\s>]+)`, 'i').exec(tag);
-	return bare ? bare[1] : null;
-}
-
-function escapeAttr(value: string): string {
-	return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }

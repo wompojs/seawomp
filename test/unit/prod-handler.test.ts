@@ -180,6 +180,70 @@ describe('createProdHandler', () => {
 		expect(await res.text()).toContain('prod 404');
 	});
 
+	it('localizes Google Fonts in runtime-rendered 404 HTML using the manifest font map', async () => {
+		write(
+			'.seawomp/server/app/404.js',
+			`import { html, defineWompo } from 'wompo';
+       function NotFound(){ return html\`<h1>fonts 404</h1>\`; }
+       defineWompo(NotFound, { name: 'fonts-not-found' });
+       export default NotFound;
+       export function head() {
+         return html\`<link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit&family=Poiret+One" />\`;
+       }`,
+		);
+		writeManifest({
+			// Key is the entity-decoded Google Fonts href, matching what the build bakes in.
+			fonts: {
+				'https://fonts.googleapis.com/css2?family=Outfit&family=Poiret+One':
+					'/_assets/fonts/google-fonts-test.css',
+			},
+			notFoundRoute: {
+				page: 'app/404.ts',
+				layouts: [],
+				serverPage: 'server/app/404.js',
+				serverLayouts: [],
+			},
+		});
+		const handler = await prodHandler();
+		const res = await handler(new Request('http://x/nope'));
+		expect(res.status).toBe(404);
+		const body = await res.text();
+		// The runtime SSR document now references the local stylesheet, exactly like prerendered
+		// pages — so an SPA navigation from this 404 to a prerendered page keeps the fonts.
+		expect(body).toContain(
+			'<link rel="stylesheet" href="/_assets/fonts/google-fonts-test.css" data-seawomp-font="local">',
+		);
+		// No leftover fonts.googleapis.com reference (stylesheet rewritten, preconnects stripped).
+		expect(body).not.toContain('fonts.googleapis.com');
+		expect(body).not.toContain('fonts.gstatic.com');
+	});
+
+	it('leaves Google Fonts links untouched when the manifest has no font map', async () => {
+		write(
+			'.seawomp/server/app/404.js',
+			`import { html, defineWompo } from 'wompo';
+       function NotFound(){ return html\`<h1>fonts 404</h1>\`; }
+       defineWompo(NotFound, { name: 'fonts-not-found-nomap' });
+       export default NotFound;
+       export function head() {
+         return html\`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit" />\`;
+       }`,
+		);
+		writeManifest({
+			notFoundRoute: {
+				page: 'app/404.ts',
+				layouts: [],
+				serverPage: 'server/app/404.js',
+				serverLayouts: [],
+			},
+		});
+		const handler = await prodHandler();
+		const res = await handler(new Request('http://x/nope'));
+		const body = await res.text();
+		expect(body).toContain('fonts.googleapis.com/css2?family=Outfit');
+		expect(body).not.toContain('data-seawomp-font="local"');
+	});
+
 	it('exposes the production handler through the Vercel Hono adapter', async () => {
 		writeManifest({});
 		write('.seawomp/static/ping.txt', 'pong');

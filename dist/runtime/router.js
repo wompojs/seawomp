@@ -22,6 +22,7 @@ import { applyHead } from './head.js';
 import { setClientI18nConfig, untranslateRoutePath } from '../i18n/context.js';
 let routes = [];
 let compiled = [];
+let specialRecords = null;
 const prefetchCache = new Map();
 const preloadedModules = new Set();
 let prefetchTtlMs = 60_000;
@@ -36,6 +37,16 @@ export function setRoutes(rs) {
     compiled = rs.map((rec) => ({ ...compilePattern(rec.pattern), rec }));
     if (typeof window !== 'undefined')
         currentRoute = createRouteSnapshot(new URL(window.location.href));
+}
+/** Register the 404 / error special-route chunk records. Called once from the hydrate-entry
+ * bootstrap. A special-route document (404/error) has no matching entry in the normal route table,
+ * so when the user navigates *away* from one the router can't tell whether the destination shares
+ * the same layout shell — and defaults to replacing the whole `<body>`, which tears down and
+ * recreates layout islands (e.g. a page-transition overlay island replays its mount animation,
+ * producing a visible double transition). With these records the router recognizes the shared
+ * layout chain via the live `data-seawomp-render` marker and swaps only the route-view instead. */
+export function setSpecialRoutes(s) {
+    specialRecords = s;
 }
 /** Tunable router knobs — call before any prefetches if you want to override defaults. */
 export function setRouterOptions(opts) {
@@ -206,6 +217,7 @@ export async function navigate(href) {
         const swap = async () => {
             const [html] = await Promise.all([htmlPromise, modulesPromise]);
             const newDoc = new DOMParser().parseFromString(html, 'text/html');
+            const fromRenderKind = currentRenderKind();
             syncPageHead(newDoc);
             syncDocumentAttributes(newDoc);
             const swapMode = swapDocument(newDoc, {
@@ -213,6 +225,7 @@ export async function navigate(href) {
                 toPathname: url.pathname,
                 currentRoute,
                 targetRoute,
+                fromRenderKind,
             });
             window.history.pushState({}, '', url.href);
             lastCommittedUrl = new URL(url.href);
@@ -280,9 +293,10 @@ const ROUTE_VIEW_SELECTOR = '[data-seawomp-route-view]';
 function swapDocument(newDoc, input) {
     const currentView = document.querySelector(ROUTE_VIEW_SELECTOR);
     const nextView = newDoc.querySelector(ROUTE_VIEW_SELECTOR);
-    const sameRouteShell = input.currentRoute &&
+    const currentLayouts = currentLayoutsFor(input.currentRoute, input.fromRenderKind);
+    const sameRouteShell = currentLayouts &&
         input.targetRoute &&
-        sameLayouts(input.currentRoute.layouts, input.targetRoute.layouts) &&
+        sameLayouts(currentLayouts, input.targetRoute.layouts) &&
         getLocale(input.fromPathname) === getLocale(input.toPathname);
     if (sameRouteShell && currentView && nextView) {
         currentView.replaceWith(nextView);
@@ -290,6 +304,31 @@ function swapDocument(newDoc, input) {
     }
     document.body.replaceWith(newDoc.body);
     return 'body';
+}
+/** The layout chunk chain of the document we're navigating away from. Normal routes carry it in
+ * their record; a 404/error document has no matching route record, so we fall back to the
+ * registered special-route record identified by the live `data-seawomp-render` marker. Returns
+ * null when the origin can't be identified — the caller then does a full-body swap.
+ *
+ * Exported for unit testing (it's DOM-free); not part of the public runtime API. */
+export function currentLayoutsFor(currentRoute, fromRenderKind) {
+    if (currentRoute)
+        return currentRoute.layouts;
+    if (!specialRecords || !fromRenderKind)
+        return null;
+    const rec = fromRenderKind === 'error'
+        ? specialRecords.error
+        : fromRenderKind === 'not-found'
+            ? specialRecords.notFound
+            : null;
+    return rec ? rec.layouts : null;
+}
+/** The current document's special-render marker, if any. Read at navigation time (before the
+ * attribute is synced to the destination) to identify a navigation away from a 404/error page. */
+function currentRenderKind() {
+    if (typeof document === 'undefined')
+        return null;
+    return document.documentElement.getAttribute('data-seawomp-render');
 }
 function sameLayouts(a, b) {
     if (a.length !== b.length)
@@ -305,6 +344,14 @@ function syncDocumentAttributes(newDoc) {
         document.documentElement.dir = nextDir;
     else
         document.documentElement.removeAttribute('dir');
+    // Keep the special-render marker in sync with the destination so it doesn't go stale after
+    // navigating away from a 404/error document (a normal page clears it). Callers capture the
+    // outgoing value before this runs, so the swap-mode decision still sees the origin's kind.
+    const nextRender = newDoc.documentElement.getAttribute('data-seawomp-render');
+    if (nextRender)
+        document.documentElement.setAttribute('data-seawomp-render', nextRender);
+    else
+        document.documentElement.removeAttribute('data-seawomp-render');
 }
 function emitNavigation(from, to, swapMode) {
     window.dispatchEvent(new CustomEvent('seawomp:navigated', {
@@ -529,6 +576,7 @@ if (typeof window !== 'undefined') {
         try {
             const swap = async () => {
                 const pathname = to.pathname;
+                const fromRenderKind = currentRenderKind();
                 const currentRoute = matchRoute(from.pathname);
                 const targetRoute = matchRoute(pathname);
                 const [html] = await Promise.all([
@@ -543,6 +591,7 @@ if (typeof window !== 'undefined') {
                     toPathname: pathname,
                     currentRoute,
                     targetRoute,
+                    fromRenderKind,
                 });
                 lastCommittedUrl = to;
                 publishRoute(to);
