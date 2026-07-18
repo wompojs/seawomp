@@ -5,10 +5,11 @@
  * customize via `app/layout.ts` and `app/page.ts`'s `head` export.
  */
 export function openShell(opts = {}) {
-    const { title = 'seawomp', frameworkHead = '', pageHead = '', hydrateScript = '/_hydrate.js', lang = 'en', } = opts;
+    const { title = 'seawomp', frameworkHead = '', pageHead = '', hydrateScript = '/_hydrate.js', lang = 'en', renderKind, } = opts;
     const pageHasTitle = /<title[\s>]/i.test(pageHead);
     const defaultTitle = pageHasTitle ? '' : `<title>${escapeHtml(title)}</title>`;
-    return (`<!doctype html><html lang="${lang}"><head>` +
+    const renderAttr = renderKind ? ` data-seawomp-render="${renderKind}"` : '';
+    return (`<!doctype html><html lang="${lang}"${renderAttr}><head>` +
         `<meta charset="utf-8" />` +
         `<meta name="viewport" content="width=device-width, initial-scale=1" />` +
         defaultTitle +

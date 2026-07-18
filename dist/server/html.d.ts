@@ -10,6 +10,10 @@ export interface ShellOptions {
     hydrateScript?: string;
     /** Optional language attribute. */
     lang?: string;
+    /** Marks a special-route render so the hydrate bootstrap loads the matching client chunk.
+     * The URL alone can't identify an error render (its URL matches a normal route), so the
+     * server annotates the document instead. Emitted as `data-seawomp-render` on `<html>`. */
+    renderKind?: 'not-found' | 'error';
 }
 export declare function openShell(opts?: ShellOptions): string;
 export declare function closeShell(hydrateScript?: string): string;

@@ -122,7 +122,7 @@ async function renderNotFound(opts, request, url, locale) {
             cwd: opts.cwd ?? process.cwd(),
             i18n: opts.i18n,
         });
-        return htmlResponse(rendered, 404, opts, locale);
+        return htmlResponse(rendered, 404, opts, locale, 'not-found');
     }
     catch (err) {
         if (isRedirectSignal(err))
@@ -137,6 +137,13 @@ async function renderError(opts, route, params, request, url, locale, err) {
         : opts.errorRoute;
     if (!errorRoute)
         return new Response(String(err), { status: 500 });
+    // Emit the client hydrate marker only when the module we render is the global `app/error.ts`
+    // special route — the one wired into the hydrate entry. `scanRoutes` also assigns that root
+    // `error.ts` as the inherited `route.errorPath` for normal routes, so we compare page paths
+    // (both server-mapped in prod, both normalized-abs in dev) rather than which branch we took.
+    // A deeper per-route `error.ts` boundary has no client chunk → no marker; its URL still
+    // matches a normal route, so the bootstrap imports the correct layout chain regardless.
+    const errorRenderKind = opts.errorRoute && errorRoute.pagePath === opts.errorRoute.pagePath ? 'error' : undefined;
     try {
         const rendered = await renderModuleToStream({
             pagePath: errorRoute.pagePath,
@@ -146,7 +153,7 @@ async function renderError(opts, route, params, request, url, locale, err) {
             cwd: opts.cwd ?? process.cwd(),
             i18n: opts.i18n,
         });
-        return htmlResponse(rendered, 500, opts, locale);
+        return htmlResponse(rendered, 500, opts, locale, errorRenderKind);
     }
     catch (renderErr) {
         if (isRedirectSignal(renderErr))
@@ -155,13 +162,14 @@ async function renderError(opts, route, params, request, url, locale, err) {
         return new Response(String(err), { status: 500 });
     }
 }
-function htmlResponse(rendered, status, opts, locale) {
+function htmlResponse(rendered, status, opts, locale, renderKind) {
     return new Response(wrapStream(rendered.body, {
         title: opts.title,
         frameworkHead: opts.frameworkHead,
         pageHead: rendered.head,
         hydrateScript: opts.hydrateScript,
         lang: locale,
+        renderKind,
     }), { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 function getBrowserLocaleRedirect(request, url, i18n, currentLocale) {
@@ -208,6 +216,7 @@ function wrapStream(inner, opts) {
                 pageHead: opts.pageHead,
                 hydrateScript: opts.hydrateScript,
                 lang: opts.lang,
+                renderKind: opts.renderKind,
             })));
             const reader = inner.getReader();
             while (true) {

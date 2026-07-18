@@ -103,7 +103,11 @@ export async function startDev(cfg: ResolvedConfig, cwd: string): Promise<void> 
 
 			// 2. Hydrate entry — generated JS string baked from the current route table.
 			if (pathname === HYDRATE_PUBLIC) {
-				const body = buildHydrateEntry(routes, { i18n: cfg.i18n, navigation: cfg.navigation });
+				const body = buildHydrateEntry(routes, {
+					i18n: cfg.i18n,
+					navigation: cfg.navigation,
+					specialRoutes,
+				});
 				return new Response(body, {
 					headers: { 'content-type': 'application/javascript', 'cache-control': 'no-cache' },
 				});

@@ -30,6 +30,41 @@ describe('buildHydrateEntry', () => {
 
 		expect(source).toContain('setRouterOptions({"viewTransitions":false});');
 	});
+
+	it('emits an empty special table when no 404/error routes exist', () => {
+		const source = buildHydrateEntry([
+			{ pattern: '/', pagePath: '/repo/app/page.ts', layoutPaths: ['/repo/app/layout.ts'] },
+		]);
+		expect(source).toContain('const special = {"notFound":null,"error":null};');
+	});
+
+	it('emits special-route client records + a marker-aware bootstrap with a 404 fallback', () => {
+		const source = buildHydrateEntry(
+			[{ pattern: '/', pagePath: '/repo/app/page.ts', layoutPaths: ['/repo/app/layout.ts'] }],
+			{
+				specialRoutes: {
+					notFoundRoute: {
+						pagePath: '/repo/app/404.ts',
+						layoutPaths: ['/repo/app/layout.ts'],
+					},
+					errorRoute: {
+						pagePath: '/repo/app/error.ts',
+						layoutPaths: ['/repo/app/layout.ts'],
+					},
+				},
+			},
+		);
+
+		// Special routes carry their own page + layout module URLs.
+		expect(source).toContain(
+			'const special = {"notFound":{"page":"/_src/repo/app/404.ts","layouts":["/_src/repo/app/layout.ts"]},"error":{"page":"/_src/repo/app/error.ts","layouts":["/_src/repo/app/layout.ts"]}};',
+		);
+		// The bootstrap prefers the SSR render marker, then URL match, then the 404 fallback.
+		expect(source).toContain("document.documentElement.getAttribute('data-seawomp-render')");
+		expect(source).toContain("kind === 'not-found'");
+		expect(source).toContain("kind === 'error'");
+		expect(source).toContain('if (!matched && special.notFound) await importRecord(special.notFound);');
+	});
 });
 
 describe('seoI18nHead', () => {

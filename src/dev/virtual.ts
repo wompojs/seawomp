@@ -10,9 +10,10 @@
  * These were Vite virtual modules (`virtual:seawomp/routes`, etc.) — with Bun we just produce
  * the JS as a string and serve it from the dev HTTP server.
  */
-import type { RouteEntry } from '../server/routes.js';
+import type { RouteEntry, SpecialRouteEntry, SpecialRoutes } from '../server/routes.js';
 import type { I18nConfig } from '../i18n/index.js';
 import type { NavigationOptions } from '../config.js';
+import { HYDRATE_BOOTSTRAP_BODY } from '../shared/hydrate-bootstrap.js';
 
 /** Convert an absolute file path to the dev URL the source-server exposes. */
 export function srcUrl(abs: string): string {
@@ -22,6 +23,13 @@ export function srcUrl(abs: string): string {
 interface HydrateEntryOptions {
 	i18n?: I18nConfig;
 	navigation?: NavigationOptions;
+	specialRoutes?: SpecialRoutes;
+}
+
+/** Dev hydrate record (page + layout source URLs) for a special route, or `null` when undefined. */
+function specialDevRecord(route: SpecialRouteEntry | undefined): { page: string; layouts: string[] } | null {
+	if (!route) return null;
+	return { page: srcUrl(route.pagePath), layouts: route.layoutPaths.map(srcUrl) };
 }
 
 /** Build the hydrate-entry JS. Inlines the route table + the HMR client snippet. */
@@ -31,6 +39,10 @@ export function buildHydrateEntry(routes: RouteEntry[], opts: HydrateEntryOption
 		page: srcUrl(r.pagePath),
 		layouts: r.layoutPaths.map(srcUrl),
 	}));
+	const special = {
+		notFound: specialDevRecord(opts.specialRoutes?.notFoundRoute),
+		error: specialDevRecord(opts.specialRoutes?.errorRoute),
+	};
 	const routerOptionsValue = {
 		...(opts.i18n ? { i18n: opts.i18n } : {}),
 		...(opts.navigation ? { viewTransitions: opts.navigation.viewTransitions } : {}),
@@ -46,32 +58,11 @@ export function buildHydrateEntry(routes: RouteEntry[], opts: HydrateEntryOption
 import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from '/_dep/seawomp/client';
 
 const routes = ${JSON.stringify(records)};
+const special = ${JSON.stringify(special)};
 setRoutes(routes);
 ${routerOptions}
 
-function compile(pattern) {
-  const parts = pattern.split('/').map((seg) => {
-    if (!seg) return '';
-    if (/^:(.+)\\*$/.test(seg)) return '(.*)';
-    if (/^:(.+)$/.test(seg)) return '([^/]+)';
-    return seg.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
-  });
-  return new RegExp('^' + parts.join('/') + '/?$');
-}
-
-async function bootstrap() {
-  const pathname = canonicalPathname(location.pathname);
-  for (const r of routes) {
-    if (compile(r.pattern).test(pathname)) {
-      for (const layout of r.layouts) await import(layout);
-      await import(r.page);
-      break;
-    }
-  }
-  hydrate(document);
-}
-
-bootstrap().catch((err) => console.error('[seawomp] hydrate failed:', err));
+${HYDRATE_BOOTSTRAP_BODY}
 
 // HMR client: reconnect once on disconnect, ignore other errors.
 (function () {

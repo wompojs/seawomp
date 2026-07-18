@@ -1,6 +1,13 @@
+import { HYDRATE_BOOTSTRAP_BODY } from '../shared/hydrate-bootstrap.js';
 /** Convert an absolute file path to the dev URL the source-server exposes. */
 export function srcUrl(abs) {
     return '/_src' + (abs.startsWith('/') ? abs : '/' + abs);
+}
+/** Dev hydrate record (page + layout source URLs) for a special route, or `null` when undefined. */
+function specialDevRecord(route) {
+    if (!route)
+        return null;
+    return { page: srcUrl(route.pagePath), layouts: route.layoutPaths.map(srcUrl) };
 }
 /** Build the hydrate-entry JS. Inlines the route table + the HMR client snippet. */
 export function buildHydrateEntry(routes, opts = {}) {
@@ -9,6 +16,10 @@ export function buildHydrateEntry(routes, opts = {}) {
         page: srcUrl(r.pagePath),
         layouts: r.layoutPaths.map(srcUrl),
     }));
+    const special = {
+        notFound: specialDevRecord(opts.specialRoutes?.notFoundRoute),
+        error: specialDevRecord(opts.specialRoutes?.errorRoute),
+    };
     const routerOptionsValue = {
         ...(opts.i18n ? { i18n: opts.i18n } : {}),
         ...(opts.navigation ? { viewTransitions: opts.navigation.viewTransitions } : {}),
@@ -23,32 +34,11 @@ export function buildHydrateEntry(routes, opts = {}) {
 import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from '/_dep/seawomp/client';
 
 const routes = ${JSON.stringify(records)};
+const special = ${JSON.stringify(special)};
 setRoutes(routes);
 ${routerOptions}
 
-function compile(pattern) {
-  const parts = pattern.split('/').map((seg) => {
-    if (!seg) return '';
-    if (/^:(.+)\\*$/.test(seg)) return '(.*)';
-    if (/^:(.+)$/.test(seg)) return '([^/]+)';
-    return seg.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
-  });
-  return new RegExp('^' + parts.join('/') + '/?$');
-}
-
-async function bootstrap() {
-  const pathname = canonicalPathname(location.pathname);
-  for (const r of routes) {
-    if (compile(r.pattern).test(pathname)) {
-      for (const layout of r.layouts) await import(layout);
-      await import(r.page);
-      break;
-    }
-  }
-  hydrate(document);
-}
-
-bootstrap().catch((err) => console.error('[seawomp] hydrate failed:', err));
+${HYDRATE_BOOTSTRAP_BODY}
 
 // HMR client: reconnect once on disconnect, ignore other errors.
 (function () {

@@ -17,6 +17,10 @@ export interface ShellOptions {
 	hydrateScript?: string;
 	/** Optional language attribute. */
 	lang?: string;
+	/** Marks a special-route render so the hydrate bootstrap loads the matching client chunk.
+	 * The URL alone can't identify an error render (its URL matches a normal route), so the
+	 * server annotates the document instead. Emitted as `data-seawomp-render` on `<html>`. */
+	renderKind?: 'not-found' | 'error';
 }
 
 export function openShell(opts: ShellOptions = {}): string {
@@ -26,11 +30,13 @@ export function openShell(opts: ShellOptions = {}): string {
 		pageHead = '',
 		hydrateScript = '/_hydrate.js',
 		lang = 'en',
+		renderKind,
 	} = opts;
 	const pageHasTitle = /<title[\s>]/i.test(pageHead);
 	const defaultTitle = pageHasTitle ? '' : `<title>${escapeHtml(title)}</title>`;
+	const renderAttr = renderKind ? ` data-seawomp-render="${renderKind}"` : '';
 	return (
-		`<!doctype html><html lang="${lang}"><head>` +
+		`<!doctype html><html lang="${lang}"${renderAttr}><head>` +
 		`<meta charset="utf-8" />` +
 		`<meta name="viewport" content="width=device-width, initial-scale=1" />` +
 		defaultTitle +

@@ -26,6 +26,7 @@ import { setSsrImageManifest } from '../shared/image-manifest.js';
 import { writeSitemap } from './sitemap.js';
 import { createHandler } from '../server/handler.js';
 import { discoverabilityHeadTags, writeDiscoverabilityFiles } from './discoverability.js';
+import { HYDRATE_BOOTSTRAP_BODY } from '../shared/hydrate-bootstrap.js';
 
 const HYDRATE_ENTRY_BASENAME = '_hydrate-entry.ts';
 
@@ -73,13 +74,14 @@ export async function buildAll(
 
 	// 2) Write a tiny hydrate entry to a tmp file under <outDir> so Bun.build can ingest it
 	//    alongside the route modules.
-	const clientEntryMap = await writeClientEntryProxies(cfg.outDir, routes);
+	const clientEntryMap = await writeClientEntryProxies(cfg.outDir, routes, specialRoutes);
 	const hydrateEntryAbs = path.join(cfg.outDir, HYDRATE_ENTRY_BASENAME);
 	const hydrateEntrySource = generateHydrateEntrySource(
 		routes,
 		cfg.i18n,
 		cfg.navigation,
 		clientEntryMap,
+		specialRoutes,
 	);
 	await fs.writeFile(hydrateEntryAbs, hydrateEntrySource, 'utf-8');
 
@@ -309,13 +311,20 @@ async function removePath(abs: string): Promise<void> {
 async function writeClientEntryProxies(
 	outDir: string,
 	routes: RouteEntry[],
+	specialRoutes: SpecialRoutes,
 ): Promise<Map<string, string>> {
 	const proxyDir = path.join(outDir, 'client-entries');
 	await fs.rm(proxyDir, { recursive: true, force: true }).catch(() => {});
 	await fs.mkdir(proxyDir, { recursive: true });
 
+	// Special routes (404 / error) get client entries too, so their islands hydrate. The root
+	// layout they share with normal routes dedupes via the Set.
 	const sourcePaths = Array.from(
-		new Set([...routes.map((r) => r.pagePath), ...routes.flatMap((r) => r.layoutPaths)]),
+		new Set([
+			...routes.map((r) => r.pagePath),
+			...routes.flatMap((r) => r.layoutPaths),
+			...specialRoutePaths(specialRoutes),
+		]),
 	);
 	const out = new Map<string, string>();
 	for (let i = 0; i < sourcePaths.length; i++) {
@@ -508,12 +517,17 @@ function generateHydrateEntrySource(
 	i18n: ResolvedConfig['i18n'],
 	navigation: ResolvedConfig['navigation'],
 	clientEntryMap: Map<string, string>,
+	specialRoutes: SpecialRoutes,
 ): string {
 	const records = routes.map((r) => ({
 		pattern: r.pattern,
 		page: clientEntryMap.get(r.pagePath) ?? r.pagePath,
 		layouts: r.layoutPaths.map((p) => clientEntryMap.get(p) ?? p),
 	}));
+	const special = {
+		notFound: specialClientRecord(specialRoutes.notFoundRoute, (p) => clientEntryMap.get(p) ?? p),
+		error: specialClientRecord(specialRoutes.errorRoute, (p) => clientEntryMap.get(p) ?? p),
+	};
 	const routerOptionsValue = {
 		...(i18n ? { i18n } : {}),
 		...(navigation ? { viewTransitions: navigation.viewTransitions } : {}),
@@ -525,33 +539,25 @@ function generateHydrateEntrySource(
 import { hydrate, setRoutes, setRouterOptions, canonicalPathname } from 'seawomp/client';
 
 const routes = ${JSON.stringify(records)};
+const special = ${JSON.stringify(special)};
 setRoutes(routes);
 ${routerOptions}
 
-function compile(pattern) {
-  const parts = pattern.split('/').map((seg) => {
-    if (!seg) return '';
-    if (/^:(.+)\\*$/.test(seg)) return '(.*)';
-    if (/^:(.+)$/.test(seg)) return '([^/]+)';
-    return seg.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
-  });
-  return new RegExp('^' + parts.join('/') + '/?$');
-}
-
-async function bootstrap() {
-  const p = canonicalPathname(location.pathname);
-  for (const r of routes) {
-    if (compile(r.pattern).test(p)) {
-      for (const layout of r.layouts) await import(layout);
-      await import(r.page);
-      break;
-    }
-  }
-  hydrate(document);
-}
-
-bootstrap().catch((err) => console.error('[seawomp] hydrate failed:', err));
+${HYDRATE_BOOTSTRAP_BODY}
 `;
+}
+
+/** Build the client hydrate record (page + layout chunk URLs) for a special route, or `null` when
+ * the route isn't defined. `resolve` maps a source path to its built asset URL. */
+function specialClientRecord(
+	route: SpecialRouteEntry | undefined,
+	resolve: (sourcePath: string) => string,
+): { page: string; layouts: string[] } | null {
+	if (!route) return null;
+	return {
+		page: resolve(route.pagePath),
+		layouts: route.layoutPaths.map(resolve),
+	};
 }
 
 /** Force `wompo` and `seawomp` (and their subpaths) to always resolve from the project root,

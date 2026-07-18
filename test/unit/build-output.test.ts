@@ -61,6 +61,59 @@ describe('production build output', () => {
 		expect(code).not.toContain('/app/page.ts');
 	});
 
+	it('emits a client hydrate chunk for the 404 special route so its islands hydrate', async () => {
+		write(
+			'app/layout.ts',
+			`import { html, defineWompo } from 'wompo';
+       function RootLayout({ children }){ return html\`<main>\${children}</main>\`; }
+       defineWompo(RootLayout, { name: 'build-404-layout' });
+       export default RootLayout;`,
+		);
+		write(
+			'app/page.ts',
+			`import { html, defineWompo } from 'wompo';
+       function Home(){ return html\`<h1>home</h1>\`; }
+       defineWompo(Home, { name: 'build-404-home' });
+       export default Home;`,
+		);
+		write(
+			'app/404.ts',
+			`import { html, defineWompo } from 'wompo';
+       function NotFound(){ return html\`<h1>not found</h1>\`; }
+       defineWompo(NotFound, { name: 'build-404-page' });
+       export default NotFound;`,
+		);
+
+		const cfg = resolveConfig(tmpRoot, { outDir: '.seawomp', publicDir: 'public' }, 'build');
+		await buildAll(cfg, tmpRoot);
+
+		const manifest = JSON.parse(
+			fs.readFileSync(path.join(tmpRoot, '.seawomp/manifest.json'), 'utf-8'),
+		) as BuildManifest;
+		// The special route is recorded server-side…
+		expect(manifest.notFoundRoute).toBeDefined();
+
+		const hydratePath = path.join(tmpRoot, '.seawomp/static', manifest.hydrateRuntime);
+		const code = fs.readFileSync(hydratePath, 'utf-8');
+
+		// …and a distinct client chunk is emitted for the 404 page (the one that defines its island).
+		const assetsDir = path.join(tmpRoot, '.seawomp/static/_assets');
+		const pageChunks = fs
+			.readdirSync(assetsDir)
+			.filter((f) => /^route-.*-page-.*\.js$/.test(f));
+		const notFoundChunk = pageChunks.find((f) =>
+			fs.readFileSync(path.join(assetsDir, f), 'utf-8').includes('build-404-page'),
+		);
+		expect(notFoundChunk).toBeDefined();
+
+		// Before the fix the 404's chunk was never referenced by the hydrate entry (it only mapped
+		// the normal routes), so a 404 render logged "island not registered". Now it is wired in…
+		expect(code).toContain(notFoundChunk!);
+		// …and the bootstrap consumes the SSR render marker so error/404 renders hydrate
+		// deterministically instead of relying on a URL match that a 404 never has.
+		expect(code).toContain('data-seawomp-render');
+	});
+
 	it('generates framework discoverability head and files without config-owned CSS', async () => {
 		write(
 			'app/page.ts',
